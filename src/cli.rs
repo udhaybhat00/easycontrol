@@ -1,6 +1,4 @@
-use crate::crypto::{
-    compute_dh_shared_secret, derive_session_key, fingerprint, generate_dh_keypair, SessionCipher,
-};
+use crate::crypto::{derive_session_key, SessionCipher};
 use crate::file_transfer::FileSession;
 use crate::input::InputSession;
 use crate::protocol::{
@@ -12,6 +10,7 @@ use crate::transport::Transport;
 use base64::Engine as _;
 use clap::{Parser, Subcommand};
 use getrandom::getrandom;
+use spake2::{Ed25519Group, Identity, Password, Spake2};
 use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,6 +22,30 @@ use tokio::task;
 use tracing::{error, info, warn};
 
 const SECRET_LEN: usize = 32;
+const SEQ_PREFIX_LEN: usize = 8; // First 8 bytes of plaintext are LE u64 sequence number for replay protection
+
+/// SPAKE2 identity strings for role separation.
+const CLIENT_IDENTITY: &[u8] = b"easycontrol-v3-client";
+const SERVER_IDENTITY: &[u8] = b"easycontrol-v3-host";
+const SPAKE2_SUITE: Ed25519Group = Ed25519Group;
+
+/// Encrypt a message with an embedded sequence number for replay protection.
+/// The first 8 bytes of plaintext are the LE u64 sequence number.
+fn encrypt_with_seq(cipher: &mut SessionCipher, seq: u64, plaintext: &[u8]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(SEQ_PREFIX_LEN + plaintext.len());
+    buf.extend_from_slice(&seq.to_le_bytes());
+    buf.extend_from_slice(plaintext);
+    cipher.encrypt(&buf)
+}
+
+/// Decrypt a message and verify sequence number for replay protection.
+/// cipher.decrypt() returns plaintext with the 8-byte sequence prefix stripped.
+fn decrypt_with_seq(
+    cipher: &mut SessionCipher,
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, crate::crypto::CryptoError> {
+    cipher.decrypt(ciphertext)
+}
 
 #[derive(Parser)]
 #[command(name = "easycontrol")]
@@ -114,42 +137,256 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Derive session key material from DH shared secret + password + salt.
-/// The password is never transmitted; it is used only as KDF input on both sides.
-fn derive_session_key_material(
-    shared_secret: &[u8; 32],
+/// Perform a SPAKE2 PAKE handshake on the host (server) side.
+/// Returns (session_id, session_cipher) on success.
+async fn host_spake2_handshake(
+    transport: &mut Transport,
     password: Option<&str>,
-    salt: &[u8; 16],
-) -> [u8; 128] {
-    let mut ikm = Vec::with_capacity(shared_secret.len() + 32);
-    ikm.extend_from_slice(shared_secret);
-    match password {
-        Some(pw) => ikm.extend_from_slice(pw.as_bytes()),
-        None => ikm.extend_from_slice(&[0u8; 32]),
+) -> Result<(String, SessionCipher), Box<dyn std::error::Error>> {
+    // Generate session ID
+    let mut session_id_bytes = [0u8; 32];
+    getrandom(&mut session_id_bytes).expect("failed to get random bytes");
+    let session_id = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&session_id_bytes);
+
+    // Create SPAKE2 server state (role B) and generate message 1
+    let password_bytes = password.unwrap_or("").as_bytes();
+    let password = Password::new(password_bytes);
+    let client_id = Identity::new(CLIENT_IDENTITY);
+    let server_id = Identity::new(SERVER_IDENTITY);
+    let (mut server_state, server_msg1) =
+        Spake2::<Ed25519Group>::start_b(&password, &client_id, &server_id);
+
+    // Send Hello (plaintext header - no secrets)
+    let hello = ControlMsg::Hello {
+        version: 1,
+        protocol_version: PROTOCOL_VERSION,
+        session_id: session_id.clone(),
+        spake2_msg_1: server_msg1,
+    };
+    let hello_plain = bincode::serialize(&hello)?;
+    let hello_frame = Frame {
+        channel: Channel::Control,
+        seq: 0,
+        payload: hello_plain,
+    };
+    transport.send_frame(&hello_frame).await?;
+
+    // Receive HelloAck (plaintext header)
+    let ack_frame = match transport.recv_frame().await? {
+        Some(Ok(f)) => f,
+        Some(Err(e)) => return Err(e.into()),
+        None => return Err("peer closed during handshake".into()),
+    };
+    let ack: ControlMsg = bincode::deserialize(&ack_frame.payload)?;
+
+    // Verify protocol version
+    match &ack {
+        ControlMsg::HelloAck {
+            protocol_version: pv,
+            ..
+        } if *pv != PROTOCOL_VERSION => {
+            warn!(
+                "protocol version mismatch: expected {}, got {}",
+                PROTOCOL_VERSION, pv
+            );
+            return Err("protocol version mismatch".into());
+        }
+        _ => {}
     }
-    let mut ikm_padded = [0u8; 64];
-    let len = ikm.len().min(64);
-    ikm_padded[..len].copy_from_slice(&ikm[..len]);
 
-    let info = b"easycontrol-v2";
-    derive_session_key(&ikm_padded, salt, info)
+    let accepted = matches!(&ack, ControlMsg::HelloAck { accepted: true, .. });
+    if !accepted {
+        warn!("connection rejected by peer");
+        return Err("connection rejected by peer".into());
+    }
+
+    // Finish SPAKE2: derive shared key from client's message 2
+    let client_msg2 = match &ack {
+        ControlMsg::HelloAck { spake2_msg_2, .. } => spake2_msg_2.clone(),
+        _ => return Err("expected HelloAck with SPAKE2 message 2".into()),
+    };
+
+    let shared_key = server_state.finish(&client_msg2).map_err(|e| {
+        error!("SPAKE2 server finish failed: {}", e);
+        e.to_string()
+    })?;
+
+    // Derive session key material from SPAKE2 shared key + session ID
+    let key_material =
+        derive_session_key(&shared_key, &session_id_bytes, b"easycontrol-v3-session");
+
+    let cipher = SessionCipher::new(&key_material);
+
+    Ok((session_id, cipher))
 }
 
-/// Encrypt a message with an embedded sequence number for replay protection.
-fn encrypt_with_seq(cipher: &mut SessionCipher, seq: u64, plaintext: &[u8]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(8 + plaintext.len());
-    buf.extend_from_slice(&seq.to_le_bytes());
-    buf.extend_from_slice(plaintext);
-    cipher.encrypt(&buf)
+/// Perform a SPAKE2 PAKE handshake on the client (client) side.
+/// Returns (session_id, session_cipher) on success.
+async fn client_spake2_handshake(
+    transport: &mut Transport,
+    expected_session_id: Option<&str>,
+    password: Option<&str>,
+) -> Result<(String, SessionCipher), Box<dyn std::error::Error>> {
+    // Receive Hello (plaintext header)
+    let hello_frame = match transport.recv_frame().await? {
+        Some(Ok(f)) => f,
+        Some(Err(e)) => return Err(e.into()),
+        None => return Err("host closed during handshake".into()),
+    };
+
+    let hello: ControlMsg = bincode::deserialize(&hello_frame.payload)?;
+    let (sid, host_spake2_msg1) = match hello {
+        ControlMsg::Hello {
+            session_id,
+            spake2_msg_1,
+            protocol_version,
+            ..
+        } => {
+            if protocol_version != PROTOCOL_VERSION {
+                return Err(format!(
+                    "protocol version mismatch: expected {}, got {}",
+                    PROTOCOL_VERSION, protocol_version
+                )
+                .into());
+            }
+            (session_id, spake2_msg_1)
+        }
+        _ => return Err("expected Hello from host".into()),
+    };
+
+    if let Some(expected) = expected_session_id {
+        if expected != &sid {
+            return Err(format!("session id mismatch: expected {}, got {}", expected, sid).into());
+        }
+    }
+
+    // Create SPAKE2 client state and generate message 1
+    let password_bytes = password.unwrap_or("").as_bytes();
+    let password = Password::new(password_bytes);
+    let client_id = Identity::new(CLIENT_IDENTITY);
+    let server_id = Identity::new(SERVER_IDENTITY);
+    let (client_state, client_msg1) =
+        Spake2::<Ed25519Group>::start_a(&password, &client_id, &server_id);
+
+    // Send HelloAck (plaintext header) with SPAKE2 message 1
+    let ack = ControlMsg::HelloAck {
+        accepted: true,
+        spake2_msg_2: client_msg1,
+        protocol_version: PROTOCOL_VERSION,
+    };
+    let ack_plain = bincode::serialize(&ack)?;
+    let ack_frame = Frame {
+        channel: Channel::Control,
+        seq: 0,
+        payload: ack_plain,
+    };
+    transport.send_frame(&ack_frame).await?;
+
+    // Finish SPAKE2: derive shared key from host's message 2
+    let shared_key = client_state.finish(&host_spake2_msg1).map_err(|e| {
+        error!("SPAKE2 client finish failed: {}", e);
+        e.to_string()
+    })?;
+
+    // Derive session key material from SPAKE2 shared key + session ID
+    let key_material = derive_session_key(&shared_key, sid.as_bytes(), b"easycontrol-v3-session");
+
+    let cipher = SessionCipher::new(&key_material);
+
+    Ok((sid, cipher))
 }
 
-/// Decrypt a message and verify sequence number for replay protection.
-/// cipher.decrypt() returns plaintext with the 8-byte seq prefix stripped.
-fn decrypt_with_seq(
-    cipher: &mut SessionCipher,
-    ciphertext: &[u8],
-) -> Result<Vec<u8>, crate::crypto::CryptoError> {
-    cipher.decrypt(ciphertext)
+/// Exchange encrypted confirmations to prove both sides derived the same key.
+/// Returns Ok(()) if both sides confirmed, Err if confirmation failed.
+async fn confirm_session(
+    transport: &Arc<Mutex<Transport>>,
+    cipher: &Arc<Mutex<SessionCipher>>,
+    next_seq: &Arc<AtomicU64>,
+    am_host: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if am_host {
+        // Host sends confirmation first
+        let confirm = ControlMsg::Confirm { confirmed: true };
+        let seq = next_seq.fetch_add(1, Ordering::Relaxed);
+        let mut c = cipher.lock().await;
+        let enc = encrypt_with_seq(&mut c, seq, &bincode::serialize(&confirm)?);
+        let frame = Frame {
+            channel: Channel::Control,
+            seq,
+            payload: enc,
+        };
+        transport.lock().await.send_frame(&frame).await?;
+
+        // Wait for client's confirmation
+        let mut t = transport.lock().await;
+        #[allow(clippy::never_loop)]
+        loop {
+            match t.recv_frame().await {
+                Ok(Some(Ok(frame))) => {
+                    let mut c = cipher.lock().await;
+                    match decrypt_with_seq(&mut c, &frame.payload) {
+                        Ok(plain) => match bincode::deserialize::<ControlMsg>(&plain) {
+                            Ok(ControlMsg::Confirm { confirmed }) => {
+                                if confirmed {
+                                    return Ok(());
+                                }
+                                return Err("peer confirmation rejected".into());
+                            }
+                            _ => return Err("unexpected message during confirmation".into()),
+                        },
+                        Err(_) => return Err("failed to decrypt confirmation".into()),
+                    }
+                }
+                Ok(Some(Err(e))) => return Err(e.into()),
+                Ok(None) => return Err("peer closed during confirmation".into()),
+                Err(e) => return Err(e.into()),
+            }
+        }
+    } else {
+        // Client waits for host's confirmation first
+        let mut t = transport.lock().await;
+        #[allow(clippy::never_loop)]
+        loop {
+            match t.recv_frame().await {
+                Ok(Some(Ok(frame))) => {
+                    let mut c = cipher.lock().await;
+                    match decrypt_with_seq(&mut c, &frame.payload) {
+                        Ok(plain) => {
+                            match bincode::deserialize::<ControlMsg>(&plain) {
+                                Ok(ControlMsg::Confirm { confirmed }) => {
+                                    if confirmed {
+                                        // Send our confirmation back
+                                        drop(c);
+                                        let confirm = ControlMsg::Confirm { confirmed: true };
+                                        let seq = next_seq.fetch_add(1, Ordering::Relaxed);
+                                        let mut c = cipher.lock().await;
+                                        let enc = encrypt_with_seq(
+                                            &mut c,
+                                            seq,
+                                            &bincode::serialize(&confirm)?,
+                                        );
+                                        let frame = Frame {
+                                            channel: Channel::Control,
+                                            seq,
+                                            payload: enc,
+                                        };
+                                        transport.lock().await.send_frame(&frame).await?;
+                                        return Ok(());
+                                    }
+                                    return Err("peer confirmation rejected".into());
+                                }
+                                _ => return Err("unexpected message during confirmation".into()),
+                            }
+                        }
+                        Err(_) => return Err("failed to decrypt confirmation".into()),
+                    }
+                }
+                Ok(Some(Err(e))) => return Err(e.into()),
+                Ok(None) => return Err("peer closed during confirmation".into()),
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
 }
 
 async fn host(
@@ -195,92 +432,24 @@ async fn handle_peer(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut transport = Transport::new(stream);
 
-    // --- Handshake (plaintext header, then encrypted after DH + password KDF) ---
-    let (host_public, host_private) = generate_dh_keypair();
+    // --- SPAKE2 Handshake ---
+    let (session_id, cipher) =
+        host_spake2_handshake(&mut transport, _unattended_password.as_deref()).await?;
 
-    let mut salt = [0u8; 16];
-    getrandom(&mut salt).expect("failed to get random bytes");
-
-    let mut session_id_bytes = [0u8; 32];
-    getrandom(&mut session_id_bytes).expect("failed to get random bytes");
-    let session_id = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&session_id_bytes);
-
-    let cipher: Arc<Mutex<SessionCipher>> = Arc::new(Mutex::new(SessionCipher::new(&[0u8; 128])));
-
-    // Send Hello (plaintext header - no secrets)
-    let hello = ControlMsg::Hello {
-        version: 1,
-        protocol_version: PROTOCOL_VERSION,
-        session_id: session_id.clone(),
-        public_key: host_public,
-    };
-    let hello_plain = bincode::serialize(&hello)?;
-    let hello_frame = Frame {
-        channel: Channel::Control,
-        seq: 0,
-        payload: hello_plain,
-    };
-    transport.send_frame(&hello_frame).await?;
-
-    // Receive HelloAck (plaintext header)
-    let ack_frame = match transport.recv_frame().await? {
-        Some(Ok(f)) => f,
-        Some(Err(e)) => return Err(e.into()),
-        None => return Err("peer closed during handshake".into()),
-    };
-    let ack_plain = &ack_frame.payload;
-    let ack: ControlMsg = bincode::deserialize(ack_plain)?;
-
-    // Verify protocol version
-    match &ack {
-        ControlMsg::HelloAck {
-            protocol_version: pv,
-            ..
-        } if *pv != PROTOCOL_VERSION => {
-            warn!(
-                "protocol version mismatch: expected {}, got {}",
-                PROTOCOL_VERSION, pv
-            );
-            return Err("protocol version mismatch".into());
-        }
-        _ => {}
-    }
-
-    let accepted = matches!(&ack, ControlMsg::HelloAck { accepted: true, .. });
-    if !accepted {
-        warn!("connection rejected by peer");
-        return Ok(());
-    }
-
-    // Derive shared key from DH + password + salt
-    let client_public = match &ack {
-        ControlMsg::HelloAck { public_key, .. } => *public_key,
-        _ => return Err("expected HelloAck with public key".into()),
-    };
-
-    let shared = compute_dh_shared_secret(&host_private, &client_public);
-    let key_material = derive_session_key_material(&shared, _unattended_password.as_deref(), &salt);
-    *cipher.lock().await = SessionCipher::new(&key_material);
-
-    info!("session {} established with {}", session_id, peer);
-
-    // --- Session loop ---
-    let (control_tx, mut control_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    let next_seq = Arc::new(AtomicU64::new(1));
-
+    let cipher: Arc<Mutex<SessionCipher>> = Arc::new(Mutex::new(cipher));
     let transport = Arc::new(Mutex::new(transport));
 
     // --- Screen session ---
     let screen_session = Arc::new(Mutex::new(ScreenSession::new(default_capture())?));
 
-    // Send initial monitor list to client (encrypted)
-    let monitors = screen_session
-        .lock()
-        .await
-        .list_monitors()
-        .unwrap_or_default();
-    let init = ScreenMsg::MonitorList { monitors };
-    let _ = send_channel_msg(&transport, &cipher, &next_seq, Channel::Screen, &init).await?;
+    // Exchange encrypted confirmations to prove both sides derived the same key
+    confirm_session(&transport, &cipher, &Arc::new(AtomicU64::new(1)), true).await?;
+
+    info!("session {} authenticated with {}", session_id, peer);
+
+    // --- Session loop ---
+    let (control_tx, mut control_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let next_seq = Arc::new(AtomicU64::new(1));
 
     // Sender task
     let t_send = transport.clone();
@@ -309,7 +478,6 @@ async fn handle_peer(
     let (screen_frame_tx, _screen_frame_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let recv_task = task::spawn(async move {
         let mut t = t_recv.lock().await;
-        let mut last_seq: Option<u64> = None;
         loop {
             match t.recv_frame().await {
                 Ok(Some(Ok(frame))) => {
@@ -487,66 +655,17 @@ async fn connect(
     let stream = tokio::net::TcpStream::connect(addr).await?;
     let mut transport = Transport::new(stream);
 
-    // --- Handshake ---
-    let (client_public, client_private) = generate_dh_keypair();
+    // --- SPAKE2 Handshake ---
+    let (session_id, cipher) =
+        client_spake2_handshake(&mut transport, session_id.as_deref(), password.as_deref()).await?;
 
-    let hello_frame = match transport.recv_frame().await? {
-        Some(Ok(f)) => f,
-        Some(Err(e)) => return Err(e.into()),
-        None => return Err("host closed during handshake".into()),
-    };
-
-    let hello: ControlMsg = bincode::deserialize(&hello_frame.payload)?;
-    let (sid, host_public_key) = match hello {
-        ControlMsg::Hello {
-            session_id,
-            public_key,
-            protocol_version,
-            ..
-        } => {
-            if protocol_version != PROTOCOL_VERSION {
-                return Err(format!(
-                    "protocol version mismatch: expected {}, got {}",
-                    PROTOCOL_VERSION, protocol_version
-                )
-                .into());
-            }
-            (session_id, public_key)
-        }
-        _ => return Err("expected Hello from host".into()),
-    };
-
-    if let Some(expected) = &session_id {
-        if expected != &sid {
-            return Err(format!("session id mismatch: expected {}, got {}", expected, sid).into());
-        }
-    }
-
-    let salt = [0u8; 16];
-    let shared = compute_dh_shared_secret(&client_private, &host_public_key);
-    let key_material = derive_session_key_material(&shared, password.as_deref(), &salt);
-
-    let cipher: Arc<Mutex<SessionCipher>> = Arc::new(Mutex::new(SessionCipher::new(&key_material)));
-
-    // Send HelloAck (plaintext header - no password)
-    let ack = ControlMsg::HelloAck {
-        accepted: true,
-        fingerprint: fingerprint(&key_material[..32].try_into().unwrap()),
-        public_key: client_public,
-        password: None,
-        protocol_version: PROTOCOL_VERSION,
-    };
-    let ack_plain = bincode::serialize(&ack)?;
-    let ack_frame = Frame {
-        channel: Channel::Control,
-        seq: 0,
-        payload: ack_plain,
-    };
-    transport.send_frame(&ack_frame).await?;
-
-    info!("connected to session {}", sid);
-
+    let cipher: Arc<Mutex<SessionCipher>> = Arc::new(Mutex::new(cipher));
     let transport = Arc::new(Mutex::new(transport));
+
+    // Exchange encrypted confirmations
+    confirm_session(&transport, &cipher, &Arc::new(AtomicU64::new(1)), false).await?;
+
+    info!("connected to session {}", session_id);
 
     // --- Receiver task for incoming frames (screen, clipboard, chat) ---
     let cipher_recv = cipher.clone();
@@ -822,65 +941,17 @@ async fn connect_via_relay(
 
     let mut transport = Transport::new(stream);
 
-    // --- Handshake ---
-    let (client_public, client_private) = generate_dh_keypair();
+    // --- SPAKE2 Handshake ---
+    let (session_id, cipher) =
+        client_spake2_handshake(&mut transport, session_id.as_deref(), password.as_deref()).await?;
 
-    let hello_frame = match transport.recv_frame().await? {
-        Some(Ok(f)) => f,
-        Some(Err(e)) => return Err(e.into()),
-        None => return Err("host closed during handshake".into()),
-    };
-
-    let hello: ControlMsg = bincode::deserialize(&hello_frame.payload)?;
-    let (sid, host_public_key) = match hello {
-        ControlMsg::Hello {
-            session_id,
-            public_key,
-            protocol_version,
-            ..
-        } => {
-            if protocol_version != PROTOCOL_VERSION {
-                return Err(format!(
-                    "protocol version mismatch: expected {}, got {}",
-                    PROTOCOL_VERSION, protocol_version
-                )
-                .into());
-            }
-            (session_id, public_key)
-        }
-        _ => return Err("expected Hello from host".into()),
-    };
-
-    if let Some(expected) = &session_id {
-        if expected != &sid {
-            return Err(format!("session id mismatch: expected {}, got {}", expected, sid).into());
-        }
-    }
-
-    let salt = [0u8; 16];
-    let shared = compute_dh_shared_secret(&client_private, &host_public_key);
-    let key_material = derive_session_key_material(&shared, password.as_deref(), &salt);
-
-    let cipher: Arc<Mutex<SessionCipher>> = Arc::new(Mutex::new(SessionCipher::new(&key_material)));
-
-    let ack = ControlMsg::HelloAck {
-        accepted: true,
-        fingerprint: fingerprint(&key_material[..32].try_into().unwrap()),
-        public_key: client_public,
-        password: None,
-        protocol_version: PROTOCOL_VERSION,
-    };
-    let ack_plain = bincode::serialize(&ack)?;
-    let ack_frame = Frame {
-        channel: Channel::Control,
-        seq: 0,
-        payload: ack_plain,
-    };
-    transport.send_frame(&ack_frame).await?;
-
-    info!("connected to session {}", sid);
-
+    let cipher: Arc<Mutex<SessionCipher>> = Arc::new(Mutex::new(cipher));
     let transport = Arc::new(Mutex::new(transport));
+
+    // Exchange encrypted confirmations
+    confirm_session(&transport, &cipher, &Arc::new(AtomicU64::new(1)), false).await?;
+
+    info!("connected to session {}", session_id);
 
     // --- Receiver task ---
     let cipher_recv = cipher.clone();

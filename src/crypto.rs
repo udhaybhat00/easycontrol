@@ -6,12 +6,6 @@ use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-#[cfg(feature = "crypto")]
-use {
-    getrandom::getrandom,
-    x25519_dalek::{PublicKey, StaticSecret},
-};
-
 type HmacSha256 = Hmac<Sha256>;
 
 const NONCE_LEN: usize = 12;
@@ -89,7 +83,7 @@ impl SessionCipher {
         let (payload, tag) = ciphertext.split_at(payload_len);
 
         let mut mac = <HmacSha256 as hmac::Mac>::new_from_slice(&self.dec_mac_key).unwrap();
-        mac.update(payload);
+        mac.update(&payload);
         let expected = mac.finalize().into_bytes();
         if tag != expected.as_slice() {
             return Err(CryptoError::MacMismatch);
@@ -109,7 +103,6 @@ impl SessionCipher {
 }
 
 /// Derive session key material using HKDF-SHA256 (RFC 5869).
-/// ikm = DH shared secret || password (or zeros if no password)
 pub fn derive_session_key(ikm: &[u8], salt: &[u8], info: &[u8]) -> [u8; KEY_MATERIAL_LEN] {
     let hk = Hkdf::<Sha256>::new(Some(salt), ikm);
     let mut okm = [0u8; KEY_MATERIAL_LEN];
@@ -126,21 +119,7 @@ pub fn fingerprint(key: &[u8; KEY_LEN]) -> String {
 }
 
 #[cfg(feature = "crypto")]
-pub fn generate_dh_keypair() -> ([u8; 32], [u8; 32]) {
-    let mut bytes = [0u8; 32];
-    getrandom(&mut bytes).expect("failed to get random bytes");
-    let secret = StaticSecret::from(bytes);
-    let public = PublicKey::from(&secret);
-    (*public.as_bytes(), secret.to_bytes())
-}
-
-#[cfg(feature = "crypto")]
-pub fn compute_dh_shared_secret(private_key: &[u8; 32], peer_public_key: &[u8; 32]) -> [u8; 32] {
-    let secret = StaticSecret::from(*private_key);
-    let public = PublicKey::from(*peer_public_key);
-    let shared = secret.diffie_hellman(&public);
-    *shared.as_bytes()
-}
+use getrandom::getrandom;
 
 #[cfg(test)]
 mod tests {

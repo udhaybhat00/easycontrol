@@ -5,7 +5,7 @@ use thiserror::Error;
 
 const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
 /// Protocol version. Increment on any incompatible change to the handshake or frame format.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Debug, Error)]
 pub enum ProtocolError {
@@ -55,13 +55,11 @@ pub enum ControlMsg {
         version: u32,
         protocol_version: u32,
         session_id: String,
-        public_key: [u8; 32],
+        spake2_msg_1: Vec<u8>,
     },
     HelloAck {
         accepted: bool,
-        fingerprint: String,
-        public_key: [u8; 32],
-        password: Option<String>,
+        spake2_msg_2: Vec<u8>,
         protocol_version: u32,
     },
     SetName {
@@ -77,6 +75,9 @@ pub enum ControlMsg {
         file: bool,
         clipboard: bool,
         chat: bool,
+    },
+    Confirm {
+        confirmed: bool,
     },
 }
 
