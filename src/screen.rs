@@ -163,12 +163,12 @@ impl ScreenSession {
 }
 
 #[cfg(feature = "capture")]
-fn default_capture() -> Box<dyn ScreenCapture> {
+pub fn default_capture() -> Box<dyn ScreenCapture> {
     Box::new(XcapCapture::default())
 }
 
 #[cfg(not(feature = "capture"))]
-fn default_capture() -> Box<dyn ScreenCapture> {
+pub fn default_capture() -> Box<dyn ScreenCapture> {
     Box::new(NullCapture)
 }
 

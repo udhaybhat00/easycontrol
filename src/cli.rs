@@ -5,6 +5,7 @@ use crate::file_transfer::FileSession;
 use crate::input::InputSession;
 use crate::protocol::{Channel, ChatMsg, ClipboardMsg, ControlMsg, Frame, InputMsg, ScreenMsg};
 use crate::relay::{connect_as_client, connect_as_host, RelayServer};
+use crate::screen::{default_capture, ScreenSession};
 use crate::transport::Transport;
 use base64::Engine as _;
 use clap::{Parser, Subcommand};
@@ -225,6 +226,22 @@ async fn handle_peer(
 
     let transport = Arc::new(Mutex::new(transport));
 
+    // --- Screen session ---
+    let screen_session = Arc::new(Mutex::new(
+        ScreenSession::new(default_capture())?,
+    ));
+
+    // Send initial monitor list to client
+    let monitors = screen_session.lock().await.list_monitors().unwrap_or_default();
+    let init = ScreenMsg::MonitorList { monitors };
+    let _ = send_channel_msg(
+        &transport,
+        &cipher,
+        &next_seq,
+        Channel::Screen,
+        &init,
+    ).await?;
+
     // Sender task
     let t_send = transport.clone();
     let next_seq_send = next_seq.clone();
@@ -244,6 +261,7 @@ async fn handle_peer(
     let t_recv = transport.clone();
     let cipher_recv = cipher.clone();
     let next_seq_recv = next_seq.clone();
+    let screen_session_recv = screen_session.clone();
     let (screen_frame_tx, _screen_frame_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let recv_task = task::spawn(async move {
         let mut t = t_recv.lock().await;
@@ -275,11 +293,11 @@ async fn handle_peer(
                                 }
                                 Channel::Clipboard => {
                                     match bincode::deserialize::<ClipboardMsg>(&plain) {
-Ok(ClipboardMsg::Get) => {
+                                        Ok(ClipboardMsg::Get) => {
                                             info!("peer requested clipboard");
                                             drop(c);
                                             let _ = send_clipboard_set(
-                                                &transport,
+                                                &t_recv,
                                                 &cipher_recv,
                                                 &next_seq_recv,
                                                 "",
@@ -300,6 +318,29 @@ Ok(ClipboardMsg::Get) => {
                                         Ok(ChatMsg::Message { from, text, .. }) => {
                                             info!("chat from {}: {}", from, text);
                                         }
+                                        Err(_) => {}
+                                    }
+                                }
+                                Channel::Screen => {
+                                    match bincode::deserialize::<ScreenMsg>(&plain) {
+                                        Ok(ScreenMsg::MonitorSelect { index }) => {
+                                            info!("client requested monitor {}", index);
+                                            drop(c);
+                                            if let Err(e) = screen_session_recv.lock().await.select_monitor(index) {
+                                                warn!("failed to select monitor {}: {}", index, e);
+                                            } else {
+                                                let monitors = screen_session_recv.lock().await.list_monitors().unwrap_or_default();
+                                                let init = ScreenMsg::MonitorList { monitors };
+                                                let _ = send_channel_msg(
+                                                    &t_recv,
+                                                    &cipher_recv,
+                                                    &next_seq_recv,
+                                                    Channel::Screen,
+                                                    &init,
+                                                ).await;
+                                            }
+                                        }
+                                        Ok(_) => {}
                                         Err(_) => {}
                                     }
                                 }
@@ -326,8 +367,46 @@ Ok(ClipboardMsg::Get) => {
         }
     });
 
+    // Screen capture loop: periodically capture and send frames to client
+    let screen_transport = transport.clone();
+    let screen_cipher = cipher.clone();
+    let screen_next_seq = next_seq.clone();
+    let screen_session_cap = screen_session.clone();
+    let screen_task = task::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+        loop {
+            interval.tick().await;
+            let mut ss = screen_session_cap.lock().await;
+            match ss.capture_frame() {
+                Ok(data) => {
+                    let (w, h) = ss.current_dimensions().unwrap_or((0, 0));
+                    let init = ScreenMsg::FrameInit { width: w, height: h, stride: w * 4, format: "RGBA8".into() };
+                    let _ = send_channel_msg(
+                        &screen_transport,
+                        &screen_cipher,
+                        &screen_next_seq,
+                        Channel::Screen,
+                        &init,
+                    ).await;
+                    let frame_msg = ScreenMsg::FrameData { seq: 0, data, compressed: false };
+                    let _ = send_channel_msg(
+                        &screen_transport,
+                        &screen_cipher,
+                        &screen_next_seq,
+                        Channel::Screen,
+                        &frame_msg,
+                    ).await;
+                }
+                Err(e) => {
+                    warn!("screen capture error: {}", e);
+                }
+            }
+        }
+    });
+
     // Drop sender when receiver ends
     let _ = recv_task.await;
+    let _ = screen_task.await;
     drop(control_tx);
     let _ = send_task.await;
 
@@ -481,6 +560,8 @@ async fn connect(
     println!("  clipboard get   - get clipboard from host");
     println!("  clipboard set <text>  - set clipboard on host");
     println!("  chat <text>     - send chat message to host");
+    println!("  monitor list    - list available monitors on host");
+    println!("  monitor select <index>  - select host monitor to view");
     println!("  q           - quit");
     print!("> ");
     io::stdout().flush()?;
@@ -536,6 +617,30 @@ async fn connect(
             "chat" if parts.len() >= 2 => {
                 let text = parts[1..].join(" ");
                 send_chat_message(&transport, &cipher, &next_seq, "client", &text).await?;
+            }
+            "monitor" => {
+                if parts.len() >= 2 && parts[1] == "list" {
+                    send_channel_msg(
+                        &transport,
+                        &cipher,
+                        &next_seq,
+                        Channel::Screen,
+                        &ScreenMsg::MonitorSelect { index: 0 },
+                    )
+                    .await?;
+                } else if parts.len() >= 3 && parts[1] == "select" {
+                    let index: usize = parts[2].parse().unwrap_or(0);
+                    send_channel_msg(
+                        &transport,
+                        &cipher,
+                        &next_seq,
+                        Channel::Screen,
+                        &ScreenMsg::MonitorSelect { index },
+                    )
+                    .await?;
+                } else {
+                    println!("usage: monitor list | monitor select <index>");
+                }
             }
             _ => {
                 println!("unknown command");
