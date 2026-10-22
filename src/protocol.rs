@@ -50,7 +50,7 @@ impl Channel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ControlMsg {
     Hello { version: u32, session_id: String, public_key: [u8; 32] },
-    HelloAck { accepted: bool, fingerprint: String, public_key: [u8; 32] },
+    HelloAck { accepted: bool, fingerprint: String, public_key: [u8; 32], password: Option<String> },
     SetName { name: String },
     Ping,
     Pong,

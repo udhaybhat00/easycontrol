@@ -103,12 +103,14 @@ async fn host(
         let file_session = file_session.clone();
         let input_session = input_session.clone();
 
+        let unattended_password = _unattended_password.clone();
         task::spawn(async move {
             if let Err(e) = handle_peer(
                 stream,
                 peer,
                 file_session,
                 input_session,
+                unattended_password,
             )
             .await
             {
@@ -123,6 +125,7 @@ async fn handle_peer(
     peer: SocketAddr,
     _file_session: Arc<Mutex<FileSession>>,
     _input_session: Arc<Mutex<InputSession>>,
+    _unattended_password: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut transport = Transport::new(stream);
 
@@ -167,9 +170,17 @@ async fn handle_peer(
     };
     let ack_plain = &ack_frame.payload;
     let ack: ControlMsg = bincode::deserialize(ack_plain)?;
-    let accepted = matches!(ack, ControlMsg::HelloAck { accepted: true, .. });
+    let accepted = match &ack {
+        ControlMsg::HelloAck { accepted: true, password, .. } => {
+            match &_unattended_password {
+                Some(expected_pw) => password.as_deref() == Some(expected_pw.as_str()),
+                None => true,
+            }
+        }
+        _ => false,
+    };
     if !accepted {
-        warn!("connection rejected by peer");
+        warn!("connection rejected by peer (bad password or not accepted)");
         return Ok(());
     }
 
@@ -309,16 +320,15 @@ async fn connect(
         }
     }
 
-    // Password check (unattended access)
-    let accepted = password.is_some() || true; // placeholder: accept if password given or no pw required
-    let ack = ControlMsg::HelloAck { accepted, fingerprint: fingerprint(&key_material[..32].try_into().unwrap()), public_key: client_public };
+    let ack = ControlMsg::HelloAck {
+        accepted: true,
+        fingerprint: fingerprint(&key_material[..32].try_into().unwrap()),
+        public_key: client_public,
+        password,
+    };
     let ack_plain = bincode::serialize(&ack)?;
     let ack_frame = Frame { channel: Channel::Control, seq: 0, payload: ack_plain };
     transport.send_frame(&ack_frame).await?;
-
-    if !accepted {
-        return Err("connection rejected by host".into());
-    }
 
     info!("connected to session {}", sid);
 
