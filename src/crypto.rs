@@ -2,9 +2,14 @@ use chacha20poly1305::{ChaCha20Poly1305, KeyInit as _};
 use chacha20poly1305::aead::{Aead, Nonce};
 use base64::Engine as _;
 use hmac::{Hmac, Mac};
-use rand::{rngs::OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+#[cfg(feature = "crypto")]
+use {
+    getrandom::getrandom,
+    x25519_dalek::{PublicKey, StaticSecret},
+};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -51,7 +56,14 @@ impl SessionCipher {
 
     pub fn encrypt(&mut self, plaintext: &[u8]) -> Vec<u8> {
         let mut nonce = [0u8; NONCE_LEN];
-        OsRng.fill_bytes(&mut nonce);
+        #[cfg(feature = "crypto")]
+        {
+            getrandom(&mut nonce).expect("failed to get random bytes");
+        }
+        #[cfg(not(feature = "crypto"))]
+        {
+            nonce.copy_from_slice(&self.enc_counter.to_le_bytes()[..NONCE_LEN]);
+        }
 
         let cipher = ChaCha20Poly1305::new_from_slice(&self.enc_key).unwrap();
         let nonce_obj = Nonce::<ChaCha20Poly1305>::from_slice(&nonce);
@@ -126,4 +138,26 @@ pub fn fingerprint(key: &[u8; KEY_LEN]) -> String {
     hasher.update(key);
     let digest = hasher.finalize();
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest[..8])
+}
+
+#[cfg(feature = "crypto")]
+pub fn generate_dh_keypair() -> ([u8; 32], [u8; 32]) {
+    let mut bytes = [0u8; 32];
+    getrandom(&mut bytes).expect("failed to get random bytes");
+    let secret = StaticSecret::from(bytes);
+    let public = PublicKey::from(&secret);
+    (*public.as_bytes(), secret.to_bytes())
+}
+
+#[cfg(feature = "crypto")]
+pub fn compute_dh_shared_secret(private_key: &[u8; 32], peer_public_key: &[u8; 32]) -> [u8; 32] {
+    let secret = StaticSecret::from(*private_key);
+    let public = PublicKey::from(*peer_public_key);
+    let shared = secret.diffie_hellman(&public);
+    *shared.as_bytes()
+}
+
+#[cfg(feature = "crypto")]
+pub fn derive_session_key_from_dh(shared_secret: &[u8; 32], salt: &[u8]) -> [u8; 128] {
+    derive_session_key(shared_secret, salt)
 }

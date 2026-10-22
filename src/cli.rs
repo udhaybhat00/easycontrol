@@ -1,11 +1,14 @@
 use crate::crypto::{derive_session_key, fingerprint, SessionCipher};
+#[cfg(feature = "crypto")]
+use crate::crypto::{derive_session_key_from_dh, compute_dh_shared_secret, generate_dh_keypair};
 use crate::file_transfer::FileSession;
 use crate::input::InputSession;
 use crate::protocol::{Channel, ControlMsg, Frame, InputMsg};
 use crate::transport::Transport;
 use base64::Engine as _;
 use clap::{Parser, Subcommand};
-use rand::{rngs::OsRng, RngCore};
+#[cfg(feature = "crypto")]
+use getrandom::getrandom;
 use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -66,7 +69,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Init => {
             let mut secret = [0u8; SECRET_LEN];
-            OsRng.fill_bytes(&mut secret);
+            #[cfg(feature = "crypto")]
+            {
+                getrandom(&mut secret).expect("failed to get random bytes");
+            }
+            #[cfg(not(feature = "crypto"))]
+            {
+                for (i, b) in secret.iter_mut().enumerate() {
+                    *b = i as u8;
+                }
+            }
             println!("{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&secret));
         }
     }
@@ -114,36 +126,63 @@ async fn handle_peer(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut transport = Transport::new(stream);
 
-    // --- Handshake ---
+    // --- Handshake (plaintext, then switch to encrypted after DH) ---
+    #[cfg(feature = "crypto")]
+    let (host_public, host_private) = generate_dh_keypair();
+    #[cfg(not(feature = "crypto"))]
+    let host_public: [u8; 32] = [0u8; 32];
+
     let mut salt = [0u8; 16];
-    OsRng.fill_bytes(&mut salt);
     let mut secret = [0u8; SECRET_LEN];
-    OsRng.fill_bytes(&mut secret);
+    #[cfg(feature = "crypto")]
+    {
+        getrandom(&mut salt).expect("failed to get random bytes");
+        getrandom(&mut secret).expect("failed to get random bytes");
+    }
+    #[cfg(not(feature = "crypto"))]
+    {
+        for (i, b) in salt.iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        for (i, b) in secret.iter_mut().enumerate() {
+            *b = (i + 16) as u8;
+        }
+    }
 
     let session_id = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&secret[..8]);
-    let key_material = derive_session_key(&secret, &salt);
-    let mut cipher = SessionCipher::new(&key_material);
 
-    // Send Hello
-    let hello = ControlMsg::Hello { version: 1, session_id: session_id.clone() };
+    let cipher: Arc<Mutex<SessionCipher>> = Arc::new(Mutex::new(SessionCipher::new(&[0u8; 128])));
+
+    // Send Hello (plaintext)
+    let hello = ControlMsg::Hello { version: 1, session_id: session_id.clone(), public_key: host_public };
     let hello_plain = bincode::serialize(&hello)?;
-    let hello_enc = cipher.encrypt(&hello_plain);
-    let hello_frame = Frame { channel: Channel::Control, seq: 0, payload: hello_enc };
+    let hello_frame = Frame { channel: Channel::Control, seq: 0, payload: hello_plain };
     transport.send_frame(&hello_frame).await?;
 
-    // Receive HelloAck
+    // Receive HelloAck (plaintext)
     let ack_frame = match transport.recv_frame().await? {
         Some(Ok(f)) => f,
         Some(Err(e)) => return Err(e.into()),
         None => return Err("peer closed during handshake".into()),
     };
-    let ack_plain = cipher.decrypt(&ack_frame.payload)?;
-    let ack: ControlMsg = bincode::deserialize(&ack_plain)?;
+    let ack_plain = &ack_frame.payload;
+    let ack: ControlMsg = bincode::deserialize(ack_plain)?;
     let accepted = matches!(ack, ControlMsg::HelloAck { accepted: true, .. });
     if !accepted {
         warn!("connection rejected by peer");
         return Ok(());
     }
+
+    #[cfg(feature = "crypto")]
+    {
+        let ControlMsg::HelloAck { public_key: client_public, .. } = &ack else {
+            return Err("expected HelloAck with public key".into());
+        };
+        let shared = compute_dh_shared_secret(&host_private, client_public);
+        let key_material = derive_session_key_from_dh(&shared, &salt);
+        *cipher.lock().await = SessionCipher::new(&key_material);
+    }
+
     info!("session {} established with {}", session_id, peer);
 
     // --- Session loop ---
@@ -169,13 +208,16 @@ async fn handle_peer(
 
     // Receiver task
     let t_recv = transport.clone();
+    let cipher_recv = cipher.clone();
+    let next_seq_recv = next_seq.clone();
     let (screen_frame_tx, _screen_frame_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let recv_task = task::spawn(async move {
         let mut t = t_recv.lock().await;
         loop {
             match t.recv_frame().await {
                 Ok(Some(Ok(frame))) => {
-                    match cipher.decrypt(&frame.payload) {
+                    let mut c = cipher_recv.lock().await;
+                    match c.decrypt(&frame.payload) {
                         Ok(plain) => {
                             match bincode::deserialize::<ControlMsg>(&plain) {
                                 Ok(ControlMsg::Bye { reason }) => {
@@ -186,8 +228,9 @@ async fn handle_peer(
                                 Ok(ControlMsg::Ping) => {
                                     let pong = ControlMsg::Pong;
                                     let pong_plain = bincode::serialize(&pong).unwrap();
-                                    let pong_enc = cipher.encrypt(&pong_plain);
-                                    let pong_frame = Frame { channel: Channel::Control, seq: next_seq.fetch_add(1, Ordering::Relaxed), payload: pong_enc };
+                                    let pong_enc = c.encrypt(&pong_plain);
+                                    drop(c);
+                                    let pong_frame = Frame { channel: Channel::Control, seq: next_seq_recv.fetch_add(1, Ordering::Relaxed), payload: pong_enc };
                                     let _ = t.send_frame(&pong_frame).await;
                                 }
                                 Ok(_) => {}
@@ -232,26 +275,33 @@ async fn connect(
     let mut transport = Transport::new(stream);
 
     // --- Handshake ---
+    #[cfg(feature = "crypto")]
+    let (client_public, client_private) = generate_dh_keypair();
+    #[cfg(not(feature = "crypto"))]
+    let client_public: [u8; 32] = [0u8; 32];
+
     let hello_frame = match transport.recv_frame().await? {
         Some(Ok(f)) => f,
         Some(Err(e)) => return Err(e.into()),
         None => return Err("host closed during handshake".into()),
     };
 
-    // We don't know the host's secret yet; derive a placeholder key.
-    // In a full implementation both sides perform a DH exchange.
-    let mut salt = [0u8; 16];
-    OsRng.fill_bytes(&mut salt);
-    let mut secret = [0u8; SECRET_LEN];
-    OsRng.fill_bytes(&mut secret);
-    let key_material = derive_session_key(&secret, &salt);
-    let mut cipher = SessionCipher::new(&key_material);
-
     let hello: ControlMsg = bincode::deserialize(&hello_frame.payload)?;
-    let sid = match hello {
-        ControlMsg::Hello { session_id, .. } => session_id,
+    let (sid, host_public_key) = match hello {
+        ControlMsg::Hello { session_id, public_key, .. } => (session_id, public_key),
         _ => return Err("expected Hello from host".into()),
     };
+
+    #[cfg(feature = "crypto")]
+    let (shared_secret, key_material) = {
+        let shared = compute_dh_shared_secret(&client_private, &host_public_key);
+        let km = derive_session_key_from_dh(&shared, &[]);
+        (shared, km)
+    };
+    #[cfg(not(feature = "crypto"))]
+    let key_material = derive_session_key(&[], &[]);
+
+    let mut cipher = SessionCipher::new(&key_material);
 
     if let Some(expected) = &session_id {
         if expected != &sid {
@@ -261,10 +311,9 @@ async fn connect(
 
     // Password check (unattended access)
     let accepted = password.is_some() || true; // placeholder: accept if password given or no pw required
-    let ack = ControlMsg::HelloAck { accepted, fingerprint: fingerprint(&key_material[..32].try_into().unwrap()) };
+    let ack = ControlMsg::HelloAck { accepted, fingerprint: fingerprint(&key_material[..32].try_into().unwrap()), public_key: client_public };
     let ack_plain = bincode::serialize(&ack)?;
-    let ack_enc = cipher.encrypt(&ack_plain);
-    let ack_frame = Frame { channel: Channel::Control, seq: 0, payload: ack_enc };
+    let ack_frame = Frame { channel: Channel::Control, seq: 0, payload: ack_plain };
     transport.send_frame(&ack_frame).await?;
 
     if !accepted {
