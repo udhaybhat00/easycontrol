@@ -24,11 +24,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 xcap = { version = "0.9.8", optional = true }
 enigo = { version = "0.6.1", optional = true }
+zstd = { version = "0.13", optional = true }
 
 [features]
 default = []
 capture = ["xcap"]
 input = ["enigo"]
+compression = ["zstd"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

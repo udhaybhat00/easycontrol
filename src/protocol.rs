@@ -1,5 +1,6 @@
 use bytes::{Buf, BufMut, BytesMut};
 use serde::{Deserialize, Serialize};
+use std::io::{Read as _, Write as _};
 use thiserror::Error;
 
 const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
@@ -14,6 +15,8 @@ pub enum ProtocolError {
     UnknownChannel(u8),
     #[error("frame too large")]
     FrameTooLarge,
+    #[error("compression error: {0}")]
+    Compression(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,7 +61,7 @@ pub enum ControlMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ScreenMsg {
     FrameInit { width: u32, height: u32, stride: u32, format: String },
-    FrameData { seq: u64, data: Vec<u8> },
+    FrameData { seq: u64, data: Vec<u8>, compressed: bool },
     FrameAck { seq: u64 },
     Cursor { x: i32, y: i32 },
     MonitorList { monitors: Vec<MonitorInfo> },
@@ -156,4 +159,36 @@ impl Frame {
             Err(e) => Some(Err(ProtocolError::Serialization(e))),
         }
     }
+}
+
+#[cfg(feature = "compression")]
+pub fn compress_payload(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+    let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 3)
+        .map_err(|e| ProtocolError::Compression(e.to_string()))?;
+    encoder
+        .write_all(data)
+        .map_err(|e| ProtocolError::Compression(e.to_string()))?;
+    encoder
+        .finish()
+        .map_err(|e| ProtocolError::Compression(e.to_string()))
+}
+
+#[cfg(feature = "compression")]
+pub fn decompress_payload(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+    let mut decoder = zstd::stream::read::Decoder::new(data)
+        .map_err(|e| ProtocolError::Compression(e.to_string()))?;
+    let mut out = Vec::new();
+    std::io::Read::read_to_end(&mut decoder, &mut out)
+        .map_err(|e| ProtocolError::Compression(e.to_string()))?;
+    Ok(out)
+}
+
+#[cfg(not(feature = "compression"))]
+pub fn compress_payload(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+    Ok(data.to_vec())
+}
+
+#[cfg(not(feature = "compression"))]
+pub fn decompress_payload(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+    Ok(data.to_vec())
 }
