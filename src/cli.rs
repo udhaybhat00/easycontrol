@@ -3,7 +3,7 @@ use crate::crypto::{derive_session_key, fingerprint, SessionCipher};
 use crate::crypto::{derive_session_key_from_dh, compute_dh_shared_secret, generate_dh_keypair};
 use crate::file_transfer::FileSession;
 use crate::input::InputSession;
-use crate::protocol::{Channel, ControlMsg, Frame, InputMsg};
+use crate::protocol::{Channel, ChatMsg, ClipboardMsg, ControlMsg, Frame, InputMsg, ScreenMsg};
 use crate::relay::{connect_as_client, connect_as_host, RelayServer};
 use crate::transport::Transport;
 use base64::Engine as _;
@@ -253,22 +253,57 @@ async fn handle_peer(
                     let mut c = cipher_recv.lock().await;
                     match c.decrypt(&frame.payload) {
                         Ok(plain) => {
-                            match bincode::deserialize::<ControlMsg>(&plain) {
-                                Ok(ControlMsg::Bye { reason }) => {
-                                    info!("peer said bye: {}", reason);
-                                    let _ = screen_frame_tx.send(Vec::new());
-                                    break;
+                            match frame.channel {
+                                Channel::Control => {
+                                    match bincode::deserialize::<ControlMsg>(&plain) {
+                                        Ok(ControlMsg::Bye { reason }) => {
+                                            info!("peer said bye: {}", reason);
+                                            let _ = screen_frame_tx.send(Vec::new());
+                                            break;
+                                        }
+                                        Ok(ControlMsg::Ping) => {
+                                            let pong = ControlMsg::Pong;
+                                            let pong_plain = bincode::serialize(&pong).unwrap();
+                                            let pong_enc = c.encrypt(&pong_plain);
+                                            drop(c);
+                                            let pong_frame = Frame { channel: Channel::Control, seq: next_seq_recv.fetch_add(1, Ordering::Relaxed), payload: pong_enc };
+                                            let _ = t.send_frame(&pong_frame).await;
+                                        }
+                                        Ok(_) => {}
+                                        Err(_) => {}
+                                    }
                                 }
-                                Ok(ControlMsg::Ping) => {
-                                    let pong = ControlMsg::Pong;
-                                    let pong_plain = bincode::serialize(&pong).unwrap();
-                                    let pong_enc = c.encrypt(&pong_plain);
-                                    drop(c);
-                                    let pong_frame = Frame { channel: Channel::Control, seq: next_seq_recv.fetch_add(1, Ordering::Relaxed), payload: pong_enc };
-                                    let _ = t.send_frame(&pong_frame).await;
+                                Channel::Clipboard => {
+                                    match bincode::deserialize::<ClipboardMsg>(&plain) {
+Ok(ClipboardMsg::Get) => {
+                                            info!("peer requested clipboard");
+                                            drop(c);
+                                            let _ = send_clipboard_set(
+                                                &transport,
+                                                &cipher_recv,
+                                                &next_seq_recv,
+                                                "",
+                                            )
+                                            .await;
+                                        }
+                                        Ok(ClipboardMsg::Set { data, .. }) => {
+                                            info!("received clipboard data: {} bytes", data.len());
+                                        }
+                                        Ok(ClipboardMsg::GetAck { .. }) => {
+                                            info!("received clipboard get ack");
+                                        }
+                                        Err(_) => {}
+                                    }
                                 }
-                                Ok(_) => {}
-                                Err(_) => {}
+                                Channel::Chat => {
+                                    match bincode::deserialize::<ChatMsg>(&plain) {
+                                        Ok(ChatMsg::Message { from, text, .. }) => {
+                                            info!("chat from {}: {}", from, text);
+                                        }
+                                        Err(_) => {}
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                         Err(_) => {}
@@ -335,7 +370,8 @@ async fn connect(
     #[cfg(not(feature = "crypto"))]
     let key_material = derive_session_key(&[], &[]);
 
-    let mut cipher = SessionCipher::new(&key_material);
+    let cipher: Arc<Mutex<SessionCipher>> =
+        Arc::new(Mutex::new(SessionCipher::new(&key_material)));
 
     if let Some(expected) = &session_id {
         if expected != &sid {
@@ -355,7 +391,85 @@ async fn connect(
 
     info!("connected to session {}", sid);
 
-    // --- Interactive loop: read stdin for input commands, print screen events ---
+    let transport = Arc::new(Mutex::new(transport));
+
+    // --- Receiver task for incoming frames (screen, clipboard, chat) ---
+    let cipher_recv = cipher.clone();
+    let t_recv = transport.clone();
+    let next_seq_recv = Arc::new(AtomicU64::new(1));
+    let (screen_frame_tx, _screen_frame_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let recv_task = task::spawn(async move {
+        let mut t = t_recv.lock().await;
+        loop {
+            match t.recv_frame().await {
+                Ok(Some(Ok(frame))) => {
+                    let mut c = cipher_recv.lock().await;
+                    match c.decrypt(&frame.payload) {
+                        Ok(plain) => {
+                            match frame.channel {
+                                Channel::Control => {
+                                    match bincode::deserialize::<ControlMsg>(&plain) {
+                                        Ok(ControlMsg::Bye { reason }) => {
+                                            info!("peer said bye: {}", reason);
+                                            let _ = screen_frame_tx.send(Vec::new());
+                                            break;
+                                        }
+                                        Ok(ControlMsg::Ping) => {
+                                            let pong = ControlMsg::Pong;
+                                            let pong_plain = bincode::serialize(&pong).unwrap();
+                                            let pong_enc = c.encrypt(&pong_plain);
+                                            drop(c);
+                                            let pong_frame = Frame { channel: Channel::Control, seq: next_seq_recv.fetch_add(1, Ordering::Relaxed), payload: pong_enc };
+                                            let _ = t.send_frame(&pong_frame).await;
+                                        }
+                                        Ok(_) => {}
+                                        Err(_) => {}
+                                    }
+                                }
+                                Channel::Clipboard => {
+                                    match bincode::deserialize::<ClipboardMsg>(&plain) {
+                                        Ok(ClipboardMsg::GetAck { data, mime }) => {
+                                            info!("clipboard get ack: {} bytes ({})", data.len(), mime);
+                                            if let Ok(text) = String::from_utf8(data.clone()) {
+                                                println!("[clipboard] {}", text);
+                                            }
+                                        }
+                                        Ok(_) => {}
+                                        Err(_) => {}
+                                    }
+                                }
+                                Channel::Chat => {
+                                    match bincode::deserialize::<ChatMsg>(&plain) {
+                                        Ok(ChatMsg::Message { from, text, .. }) => {
+                                            println!("[chat from {}] {}", from, text);
+                                        }
+                                        Err(_) => {}
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+                Ok(Some(Err(e))) => {
+                    error!("protocol error: {}", e);
+                    break;
+                }
+                Ok(None) => {
+                    info!("peer disconnected");
+                    let _ = screen_frame_tx.send(Vec::new());
+                    break;
+                }
+                Err(e) => {
+                    error!("recv error: {}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+    // --- Interactive loop: read stdin for input commands ---
     let stdin = tokio::io::stdin();
     let mut lines = BufReader::new(stdin).lines();
 
@@ -364,12 +478,14 @@ async fn connect(
     println!("  c <x> <y>   - click");
     println!("  k <code>    - press key");
     println!("  t <text>    - type text");
+    println!("  clipboard get   - get clipboard from host");
+    println!("  clipboard set <text>  - set clipboard on host");
+    println!("  chat <text>     - send chat message to host");
     println!("  q           - quit");
     print!("> ");
     io::stdout().flush()?;
 
     let next_seq = Arc::new(AtomicU64::new(1));
-    let transport = Arc::new(Mutex::new(transport));
 
     loop {
         let line = match lines.next_line().await? {
@@ -390,22 +506,36 @@ async fn connect(
                 let x: i32 = parts[1].parse().unwrap_or(0);
                 let y: i32 = parts[2].parse().unwrap_or(0);
                 let msg = InputMsg::MouseMove { x, y };
-                send_input(&transport, &mut cipher, &next_seq, msg).await?;
+                send_input(&transport, &cipher, &next_seq, msg).await?;
             }
             "c" if parts.len() == 3 => {
                 let x: i32 = parts[1].parse().unwrap_or(0);
                 let y: i32 = parts[2].parse().unwrap_or(0);
-                send_input(&transport, &mut cipher, &next_seq, InputMsg::MousePress { button: 1, x, y }).await?;
-                send_input(&transport, &mut cipher, &next_seq, InputMsg::MouseRelease { button: 1, x, y }).await?;
+                send_input(&transport, &cipher, &next_seq, InputMsg::MousePress { button: 1, x, y }).await?;
+                send_input(&transport, &cipher, &next_seq, InputMsg::MouseRelease { button: 1, x, y }).await?;
             }
             "k" if parts.len() == 2 => {
                 let code: u16 = parts[1].parse().unwrap_or(0);
-                send_input(&transport, &mut cipher, &next_seq, InputMsg::KeyPress { code }).await?;
-                send_input(&transport, &mut cipher, &next_seq, InputMsg::KeyRelease { code }).await?;
+                send_input(&transport, &cipher, &next_seq, InputMsg::KeyPress { code }).await?;
+                send_input(&transport, &cipher, &next_seq, InputMsg::KeyRelease { code }).await?;
             }
             "t" if parts.len() >= 2 => {
                 let text = parts[1..].join(" ");
-                send_input(&transport, &mut cipher, &next_seq, InputMsg::KeyType { text }).await?;
+                send_input(&transport, &cipher, &next_seq, InputMsg::KeyType { text }).await?;
+            }
+            "clipboard" => {
+                if parts.len() >= 2 && parts[1] == "get" {
+                    send_clipboard_get(&transport, &cipher, &next_seq).await?;
+                } else if parts.len() >= 3 && parts[1] == "set" {
+                    let text = parts[2..].join(" ");
+                    send_clipboard_set(&transport, &cipher, &next_seq, &text).await?;
+                } else {
+                    println!("usage: clipboard get | clipboard set <text>");
+                }
+            }
+            "chat" if parts.len() >= 2 => {
+                let text = parts[1..].join(" ");
+                send_chat_message(&transport, &cipher, &next_seq, "client", &text).await?;
             }
             _ => {
                 println!("unknown command");
@@ -418,10 +548,16 @@ async fn connect(
     // Send Bye
     let bye = ControlMsg::Bye { reason: "client disconnect".into() };
     let bye_plain = bincode::serialize(&bye)?;
-    let bye_enc = cipher.encrypt(&bye_plain);
+    let bye_enc = {
+        let mut c = cipher.lock().await;
+        c.encrypt(&bye_plain)
+    };
     let bye_frame = Frame { channel: Channel::Control, seq: next_seq.fetch_add(1, Ordering::Relaxed), payload: bye_enc };
     let mut t = transport.lock().await;
     let _ = t.send_frame(&bye_frame).await;
+
+    // Wait for receiver task to finish
+    let _ = recv_task.await;
 
     Ok(())
 }
@@ -496,7 +632,8 @@ async fn connect_via_relay(
     #[cfg(not(feature = "crypto"))]
     let key_material = derive_session_key(&[], &[]);
 
-    let mut cipher = SessionCipher::new(&key_material);
+    let cipher: Arc<Mutex<SessionCipher>> =
+        Arc::new(Mutex::new(SessionCipher::new(&key_material)));
 
     if let Some(expected) = &session_id {
         if expected != &sid {
@@ -551,22 +688,22 @@ async fn connect_via_relay(
                 let x: i32 = parts[1].parse().unwrap_or(0);
                 let y: i32 = parts[2].parse().unwrap_or(0);
                 let msg = InputMsg::MouseMove { x, y };
-                send_input(&transport, &mut cipher, &next_seq, msg).await?;
+                send_input(&transport, &cipher, &next_seq, msg).await?;
             }
             "c" if parts.len() == 3 => {
                 let x: i32 = parts[1].parse().unwrap_or(0);
                 let y: i32 = parts[2].parse().unwrap_or(0);
-                send_input(&transport, &mut cipher, &next_seq, InputMsg::MousePress { button: 1, x, y }).await?;
-                send_input(&transport, &mut cipher, &next_seq, InputMsg::MouseRelease { button: 1, x, y }).await?;
+                send_input(&transport, &cipher, &next_seq, InputMsg::MousePress { button: 1, x, y }).await?;
+                send_input(&transport, &cipher, &next_seq, InputMsg::MouseRelease { button: 1, x, y }).await?;
             }
             "k" if parts.len() == 2 => {
                 let code: u16 = parts[1].parse().unwrap_or(0);
-                send_input(&transport, &mut cipher, &next_seq, InputMsg::KeyPress { code }).await?;
-                send_input(&transport, &mut cipher, &next_seq, InputMsg::KeyRelease { code }).await?;
+                send_input(&transport, &cipher, &next_seq, InputMsg::KeyPress { code }).await?;
+                send_input(&transport, &cipher, &next_seq, InputMsg::KeyRelease { code }).await?;
             }
             "t" if parts.len() >= 2 => {
                 let text = parts[1..].join(" ");
-                send_input(&transport, &mut cipher, &next_seq, InputMsg::KeyType { text }).await?;
+                send_input(&transport, &cipher, &next_seq, InputMsg::KeyType { text }).await?;
             }
             _ => {
                 println!("unknown command");
@@ -579,7 +716,10 @@ async fn connect_via_relay(
     // Send Bye
     let bye = ControlMsg::Bye { reason: "client disconnect".into() };
     let bye_plain = bincode::serialize(&bye)?;
-    let bye_enc = cipher.encrypt(&bye_plain);
+    let bye_enc = {
+        let mut c = cipher.lock().await;
+        c.encrypt(&bye_plain)
+    };
     let bye_frame = Frame { channel: Channel::Control, seq: next_seq.fetch_add(1, Ordering::Relaxed), payload: bye_enc };
     let mut t = transport.lock().await;
     let _ = t.send_frame(&bye_frame).await;
@@ -589,15 +729,75 @@ async fn connect_via_relay(
 
 async fn send_input(
     transport: &Arc<Mutex<Transport>>,
-    cipher: &mut SessionCipher,
+    cipher: &Arc<Mutex<SessionCipher>>,
     next_seq: &Arc<AtomicU64>,
     msg: InputMsg,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let mut c = cipher.lock().await;
     let plain = bincode::serialize(&msg)?;
-    let enc = cipher.encrypt(&plain);
+    let enc = c.encrypt(&plain);
     let seq = next_seq.fetch_add(1, Ordering::Relaxed);
     let frame = Frame { channel: Channel::Input, seq, payload: enc };
     let mut t = transport.lock().await;
     t.send_frame(&frame).await?;
     Ok(())
 }
+
+async fn send_channel_msg<T: serde::Serialize + Clone>(
+    transport: &Arc<Mutex<Transport>>,
+    cipher: &Arc<Mutex<SessionCipher>>,
+    next_seq: &Arc<AtomicU64>,
+    channel: Channel,
+    msg: &T,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut c = cipher.lock().await;
+    let plain = bincode::serialize(msg)?;
+    let enc = c.encrypt(&plain);
+    let seq = next_seq.fetch_add(1, Ordering::Relaxed);
+    let frame = Frame { channel, seq, payload: enc };
+    let mut t = transport.lock().await;
+    t.send_frame(&frame).await?;
+    Ok(())
+}
+
+async fn send_clipboard_get(
+    transport: &Arc<Mutex<Transport>>,
+    cipher: &Arc<Mutex<SessionCipher>>,
+    next_seq: &Arc<AtomicU64>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    send_channel_msg(transport, cipher, next_seq, Channel::Clipboard, &ClipboardMsg::Get).await
+}
+
+async fn send_clipboard_set(
+    transport: &Arc<Mutex<Transport>>,
+    cipher: &Arc<Mutex<SessionCipher>>,
+    next_seq: &Arc<AtomicU64>,
+    text: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    send_channel_msg(
+        transport,
+        cipher,
+        next_seq,
+        Channel::Clipboard,
+        &ClipboardMsg::Set { data: text.as_bytes().to_vec(), mime: "text/plain".into() },
+    )
+    .await
+}
+
+async fn send_chat_message(
+    transport: &Arc<Mutex<Transport>>,
+    cipher: &Arc<Mutex<SessionCipher>>,
+    next_seq: &Arc<AtomicU64>,
+    from: &str,
+    text: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    send_channel_msg(
+        transport,
+        cipher,
+        next_seq,
+        Channel::Chat,
+        &ChatMsg::Message { from: from.into(), text: text.into(), ts: 0 },
+    )
+    .await
+}
+
