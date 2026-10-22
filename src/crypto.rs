@@ -1,6 +1,7 @@
-use chacha20poly1305::{ChaCha20Poly1305, KeyInit as _};
-use chacha20poly1305::aead::{Aead, Nonce};
 use base64::Engine as _;
+use chacha20poly1305::aead::{Aead, Nonce as AeadNonce};
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit as _};
+use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -13,6 +14,12 @@ use {
 
 type HmacSha256 = Hmac<Sha256>;
 
+const NONCE_LEN: usize = 12;
+const TAG_LEN: usize = 16;
+const MAC_LEN: usize = 32;
+const KEY_LEN: usize = 32;
+const KEY_MATERIAL_LEN: usize = 128;
+
 #[derive(Debug, Error)]
 pub enum CryptoError {
     #[error("cipher error")]
@@ -23,54 +30,45 @@ pub enum CryptoError {
     InvalidLength,
 }
 
-const NONCE_LEN: usize = 12;
-const TAG_LEN: usize = 16;
-const MAC_LEN: usize = 32;
-const KEY_LEN: usize = 32;
-
 pub struct SessionCipher {
     enc_key: [u8; KEY_LEN],
     dec_key: [u8; KEY_LEN],
     enc_mac_key: [u8; KEY_LEN],
     dec_mac_key: [u8; KEY_LEN],
-    enc_counter: u64,
-    dec_counter: u64,
 }
 
 impl SessionCipher {
-    pub fn new(material: &[u8; 128]) -> Self {
-        let (rest, enc_mac_key) = material.split_at(KEY_LEN);
-        let (rest, dec_mac_key) = rest.split_at(KEY_LEN);
-        let (rest, enc_key) = rest.split_at(KEY_LEN);
-        let (_rest, dec_key) = rest.split_at(KEY_LEN);
+    pub fn new(material: &[u8; KEY_MATERIAL_LEN]) -> Self {
+        let mut enc_key = [0u8; KEY_LEN];
+        let mut dec_key = [0u8; KEY_LEN];
+        let mut enc_mac_key = [0u8; KEY_LEN];
+        let mut dec_mac_key = [0u8; KEY_LEN];
+        enc_mac_key.copy_from_slice(&material[0..KEY_LEN]);
+        dec_mac_key.copy_from_slice(&material[KEY_LEN..2 * KEY_LEN]);
+        enc_key.copy_from_slice(&material[2 * KEY_LEN..3 * KEY_LEN]);
+        dec_key.copy_from_slice(&material[3 * KEY_LEN..4 * KEY_LEN]);
 
         Self {
-            enc_key: enc_key.try_into().unwrap(),
-            dec_key: dec_key.try_into().unwrap(),
-            enc_mac_key: enc_mac_key.try_into().unwrap(),
-            dec_mac_key: dec_mac_key.try_into().unwrap(),
-            enc_counter: 0,
-            dec_counter: 0,
+            enc_key,
+            dec_key,
+            enc_mac_key,
+            dec_mac_key,
         }
     }
 
+    /// Encrypt plaintext. Returns ct(plaintext + chacha_tag) + nonce(12) + mac_tag(16).
     pub fn encrypt(&mut self, plaintext: &[u8]) -> Vec<u8> {
         let mut nonce = [0u8; NONCE_LEN];
-        #[cfg(feature = "crypto")]
-        {
-            getrandom(&mut nonce).expect("failed to get random bytes");
-        }
-        #[cfg(not(feature = "crypto"))]
-        {
-            nonce.copy_from_slice(&self.enc_counter.to_le_bytes()[..NONCE_LEN]);
-        }
+        getrandom(&mut nonce).expect("failed to get random bytes");
 
         let cipher = ChaCha20Poly1305::new_from_slice(&self.enc_key).unwrap();
-        let nonce_obj = Nonce::<ChaCha20Poly1305>::from_slice(&nonce);
-        let mut ct = cipher.encrypt(nonce_obj, plaintext).expect("chacha encrypt");
+        let nonce_obj = AeadNonce::<ChaCha20Poly1305>::from_slice(&nonce);
+        let mut ct = cipher
+            .encrypt(nonce_obj, plaintext)
+            .expect("chacha encrypt");
         ct.extend_from_slice(&nonce);
 
-        let mut mac = <HmacSha256 as Mac>::new_from_slice(&self.enc_mac_key).unwrap();
+        let mut mac = <HmacSha256 as hmac::Mac>::new_from_slice(&self.enc_mac_key).unwrap();
         mac.update(&ct);
         let tag = mac.finalize().into_bytes();
 
@@ -78,10 +76,10 @@ impl SessionCipher {
         out.extend_from_slice(&ct);
         out.extend_from_slice(&tag);
 
-        self.enc_counter = self.enc_counter.wrapping_add(1);
         out
     }
 
+    /// Decrypt ciphertext produced by encrypt. Returns plaintext.
     pub fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
         if ciphertext.len() < NONCE_LEN + TAG_LEN + MAC_LEN {
             return Err(CryptoError::InvalidLength);
@@ -90,7 +88,7 @@ impl SessionCipher {
         let payload_len = ciphertext.len() - MAC_LEN;
         let (payload, tag) = ciphertext.split_at(payload_len);
 
-        let mut mac = <HmacSha256 as Mac>::new_from_slice(&self.dec_mac_key).unwrap();
+        let mut mac = <HmacSha256 as hmac::Mac>::new_from_slice(&self.dec_mac_key).unwrap();
         mac.update(payload);
         let expected = mac.finalize().into_bytes();
         if tag != expected.as_slice() {
@@ -101,38 +99,25 @@ impl SessionCipher {
         let (ct, nonce) = payload.split_at(nonce_start);
 
         let cipher = ChaCha20Poly1305::new_from_slice(&self.dec_key).unwrap();
-        let nonce_obj = Nonce::<ChaCha20Poly1305>::from_slice(nonce);
+        let nonce_obj = AeadNonce::<ChaCha20Poly1305>::from_slice(nonce);
         let pt = cipher
             .decrypt(nonce_obj, ct)
             .map_err(|_| CryptoError::Cipher)?;
 
-        self.dec_counter = self.dec_counter.wrapping_add(1);
         Ok(pt)
     }
 }
 
-pub fn derive_session_key(secret: &[u8], salt: &[u8]) -> [u8; 128] {
-    let mut hasher = Sha256::new();
-    hasher.update(salt);
-    hasher.update(secret);
-    let mut out = [0u8; 128];
-    let mut block = [0u8; KEY_LEN];
-    let mut counter: u64 = 0;
-    let mut pos = 0;
-    while pos < out.len() {
-        let mut h = Sha256::new();
-        h.update(&block);
-        h.update(&counter.to_le_bytes());
-        let digest = h.finalize();
-        let take = (out.len() - pos).min(digest.len());
-        out[pos..pos + take].copy_from_slice(&digest[..take]);
-        pos += take;
-        block.copy_from_slice(&digest);
-        counter = counter.wrapping_add(1);
-    }
-    out
+/// Derive session key material using HKDF-SHA256 (RFC 5869).
+/// ikm = DH shared secret || password (or zeros if no password)
+pub fn derive_session_key(ikm: &[u8], salt: &[u8], info: &[u8]) -> [u8; KEY_MATERIAL_LEN] {
+    let hk = Hkdf::<Sha256>::new(Some(salt), ikm);
+    let mut okm = [0u8; KEY_MATERIAL_LEN];
+    hk.expand(info, &mut okm).expect("HKDF expand failed");
+    okm
 }
 
+/// Compute a fingerprint of a public key for display/verification.
 pub fn fingerprint(key: &[u8; KEY_LEN]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(key);
@@ -157,7 +142,71 @@ pub fn compute_dh_shared_secret(private_key: &[u8; 32], peer_public_key: &[u8; 3
     *shared.as_bytes()
 }
 
-#[cfg(feature = "crypto")]
-pub fn derive_session_key_from_dh(shared_secret: &[u8; 32], salt: &[u8]) -> [u8; 128] {
-    derive_session_key(shared_secret, salt)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: create a cipher where all four keys are equal (for testing only).
+    /// In the real protocol, host encrypts with enc_key/decrypts with dec_key,
+    /// while client does the opposite.
+    fn test_cipher() -> SessionCipher {
+        let mut material = [0u8; KEY_MATERIAL_LEN];
+        getrandom(&mut material[..KEY_LEN]).unwrap();
+        let seed = material[..KEY_LEN].to_vec();
+        material[KEY_LEN..2 * KEY_LEN].copy_from_slice(&seed);
+        material[2 * KEY_LEN..3 * KEY_LEN].copy_from_slice(&seed);
+        material[3 * KEY_LEN..4 * KEY_LEN].copy_from_slice(&seed);
+        SessionCipher::new(&material)
+    }
+
+    #[test]
+    fn encrypt_decrypt_roundtrip() {
+        let mut cipher = test_cipher();
+        let plaintext = b"hello world";
+        let ct = cipher.encrypt(plaintext);
+        assert_ne!(ct, plaintext);
+        let pt = cipher.decrypt(&ct).unwrap();
+        assert_eq!(pt, plaintext);
+    }
+
+    #[test]
+    fn mac_tampering_rejected() {
+        let mut cipher = test_cipher();
+
+        let pt = b"tamper me";
+        let mut ct = cipher.encrypt(pt);
+
+        // Flip a byte in the ciphertext portion
+        ct[0] ^= 0x01;
+        assert!(matches!(cipher.decrypt(&ct), Err(CryptoError::MacMismatch)));
+    }
+
+    #[test]
+    fn derive_session_key_deterministic() {
+        let ikm = b"test ikm material";
+        let salt = b"test salt";
+        let info = b"test info";
+        let k1 = derive_session_key(ikm, salt, info);
+        let k2 = derive_session_key(ikm, salt, info);
+        assert_eq!(k1, k2);
+        assert_ne!(k1, [0u8; KEY_MATERIAL_LEN]);
+    }
+
+    #[test]
+    fn fingerprint_deterministic() {
+        let key = [1u8; 32];
+        let f1 = fingerprint(&key);
+        let f2 = fingerprint(&key);
+        assert_eq!(f1, f2);
+        assert_eq!(f1.len(), 11); // base64 of 8 bytes = 11 chars
+    }
+
+    #[test]
+    fn invalid_length_rejected() {
+        let mut cipher = test_cipher();
+        assert!(matches!(
+            cipher.decrypt(&[0u8; 5]),
+            Err(CryptoError::InvalidLength)
+        ));
+    }
 }

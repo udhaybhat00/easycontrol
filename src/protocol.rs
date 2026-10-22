@@ -4,6 +4,8 @@ use std::io::{Read as _, Write as _};
 use thiserror::Error;
 
 const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
+/// Protocol version. Increment on any incompatible change to the handshake or frame format.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Error)]
 pub enum ProtocolError {
@@ -49,23 +51,61 @@ impl Channel {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ControlMsg {
-    Hello { version: u32, session_id: String, public_key: [u8; 32] },
-    HelloAck { accepted: bool, fingerprint: String, public_key: [u8; 32], password: Option<String> },
-    SetName { name: String },
+    Hello {
+        version: u32,
+        protocol_version: u32,
+        session_id: String,
+        public_key: [u8; 32],
+    },
+    HelloAck {
+        accepted: bool,
+        fingerprint: String,
+        public_key: [u8; 32],
+        password: Option<String>,
+        protocol_version: u32,
+    },
+    SetName {
+        name: String,
+    },
     Ping,
     Pong,
-    Bye { reason: String },
-    Permissions { input: bool, file: bool, clipboard: bool, chat: bool },
+    Bye {
+        reason: String,
+    },
+    Permissions {
+        input: bool,
+        file: bool,
+        clipboard: bool,
+        chat: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ScreenMsg {
-    FrameInit { width: u32, height: u32, stride: u32, format: String },
-    FrameData { seq: u64, data: Vec<u8>, compressed: bool },
-    FrameAck { seq: u64 },
-    Cursor { x: i32, y: i32 },
-    MonitorList { monitors: Vec<MonitorInfo> },
-    MonitorSelect { index: usize },
+    FrameInit {
+        width: u32,
+        height: u32,
+        stride: u32,
+        format: String,
+    },
+    FrameData {
+        seq: u64,
+        data: Vec<u8>,
+        compressed: bool,
+    },
+    FrameAck {
+        seq: u64,
+    },
+    Cursor {
+        x: i32,
+        y: i32,
+    },
+    MonitorList {
+        monitors: Vec<MonitorInfo>,
+    },
+    MonitorSelect {
+        index: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,13 +131,35 @@ pub enum InputMsg {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FileMsg {
-    ListDir { path: String },
-    ListDirAck { entries: Vec<FileEntry> },
-    ReadRequest { path: String, offset: u64, length: u32 },
-    ReadData { path: String, offset: u64, data: Vec<u8> },
-    WriteRequest { path: String, offset: u64, data: Vec<u8> },
-    WriteAck { path: String, offset: u64, bytes_written: u32 },
-    Cancel { path: String },
+    ListDir {
+        path: String,
+    },
+    ListDirAck {
+        entries: Vec<FileEntry>,
+    },
+    ReadRequest {
+        path: String,
+        offset: u64,
+        length: u32,
+    },
+    ReadData {
+        path: String,
+        offset: u64,
+        data: Vec<u8>,
+    },
+    WriteRequest {
+        path: String,
+        offset: u64,
+        data: Vec<u8>,
+    },
+    WriteAck {
+        path: String,
+        offset: u64,
+        bytes_written: u32,
+    },
+    Cancel {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

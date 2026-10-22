@@ -1,8 +1,8 @@
 use crate::protocol::FileEntry;
 use std::path::PathBuf;
+use thiserror::Error;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
-use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum FileError {
@@ -56,7 +56,11 @@ impl FileSession {
                 size: metadata.len(),
                 modified: metadata
                     .modified()
-                    .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+                    .map(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                    })
                     .unwrap_or(0),
             });
         }
@@ -64,7 +68,12 @@ impl FileSession {
         Ok(entries)
     }
 
-    pub async fn read_chunk(&self, path: &str, offset: u64, length: u32) -> Result<Vec<u8>, FileError> {
+    pub async fn read_chunk(
+        &self,
+        path: &str,
+        offset: u64,
+        length: u32,
+    ) -> Result<Vec<u8>, FileError> {
         let resolved = self.resolve(path)?;
         let mut file = fs::File::open(&resolved).await?;
         file.seek(std::io::SeekFrom::Start(offset)).await?;
@@ -74,7 +83,12 @@ impl FileSession {
         Ok(buf)
     }
 
-    pub async fn write_chunk(&self, path: &str, offset: u64, data: &[u8]) -> Result<u32, FileError> {
+    pub async fn write_chunk(
+        &self,
+        path: &str,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<u32, FileError> {
         let resolved = self.resolve(path)?;
         if let Some(parent) = resolved.parent() {
             fs::create_dir_all(parent).await?;

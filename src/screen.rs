@@ -1,7 +1,7 @@
 use crate::protocol::MonitorInfo;
+use thiserror::Error;
 #[cfg(feature = "capture")]
 use xcap::Monitor as XcapMonitor;
-use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ScreenError {
@@ -81,8 +81,12 @@ impl ScreenCapture for XcapCapture {
         for (i, mon) in monitors.into_iter().enumerate() {
             let x = mon.x().map_err(|e| ScreenError::Capture(e.to_string()))? as i32;
             let y = mon.y().map_err(|e| ScreenError::Capture(e.to_string()))? as i32;
-            let width = mon.width().map_err(|e| ScreenError::Capture(e.to_string()))?;
-            let height = mon.height().map_err(|e| ScreenError::Capture(e.to_string()))?;
+            let width = mon
+                .width()
+                .map_err(|e| ScreenError::Capture(e.to_string()))?;
+            let height = mon
+                .height()
+                .map_err(|e| ScreenError::Capture(e.to_string()))?;
             out.push(MonitorInfo {
                 index: i,
                 x,
@@ -112,8 +116,12 @@ impl ScreenCapture for XcapCapture {
             return Err(ScreenError::MonitorNotFound(monitor));
         }
         let mon = &monitors[monitor];
-        let width = mon.width().map_err(|e| ScreenError::Capture(e.to_string()))?;
-        let height = mon.height().map_err(|e| ScreenError::Capture(e.to_string()))?;
+        let width = mon
+            .width()
+            .map_err(|e| ScreenError::Capture(e.to_string()))?;
+        let height = mon
+            .height()
+            .map_err(|e| ScreenError::Capture(e.to_string()))?;
         Ok((width, height))
     }
 }
@@ -129,7 +137,10 @@ impl ScreenSession {
         if monitors.is_empty() {
             return Err(ScreenError::Capture("no monitors".into()));
         }
-        Ok(Self { capture, monitor: 0 })
+        Ok(Self {
+            capture,
+            monitor: 0,
+        })
     }
 
     pub fn monitor_count(&self) -> usize {
@@ -174,6 +185,9 @@ pub fn default_capture() -> Box<dyn ScreenCapture> {
 
 impl Default for ScreenSession {
     fn default() -> Self {
-        Self { capture: default_capture(), monitor: 0 }
+        Self {
+            capture: default_capture(),
+            monitor: 0,
+        }
     }
 }

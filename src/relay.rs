@@ -2,10 +2,14 @@ use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio::task;
+use tokio::time;
+
+const REGISTRATION_TIMEOUT_SECS: u64 = 300; // 5 minutes
 
 pub struct RelayServer {
     listen_addr: SocketAddr,
@@ -54,11 +58,27 @@ async fn handle_relay_peer(
 
     match reg.role {
         Role::Host => {
-            tracing::info!("host registered session {} from {}", reg.session_id, peer);
-            pending_hosts.lock().await.insert(reg.session_id, stream);
+            let session_id = reg.session_id.clone();
+            tracing::info!("host registered session {} from {}", session_id, peer);
+            pending_hosts
+                .lock()
+                .await
+                .insert(session_id.clone(), stream);
             // Keep this task alive so the host stream stays registered in pending_hosts.
             // The entry is removed when a client connects and bridges the connection.
-            std::future::pending::<()>().await;
+            // Timeout after REGISTRATION_TIMEOUT_SECS to prevent stale registrations.
+            match time::timeout(
+                Duration::from_secs(REGISTRATION_TIMEOUT_SECS),
+                std::future::pending::<()>(),
+            )
+            .await
+            {
+                Ok(_) => {}
+                Err(_) => {
+                    tracing::info!("host registration timed out for session {}", session_id);
+                    pending_hosts.lock().await.remove(&session_id);
+                }
+            }
             Ok(()) // unreachable
         }
         Role::Client { target_session } => {
@@ -100,10 +120,7 @@ enum Role {
 }
 
 /// Connect to the relay as a host: register session_id, return the connected stream.
-pub async fn connect_as_host(
-    relay_addr: &str,
-    session_id: &str,
-) -> io::Result<TcpStream> {
+pub async fn connect_as_host(relay_addr: &str, session_id: &str) -> io::Result<TcpStream> {
     let mut stream = TcpStream::connect(relay_addr).await?;
     let reg = Registration {
         role: Role::Host,
@@ -116,10 +133,7 @@ pub async fn connect_as_host(
 }
 
 /// Connect to the relay as a client: target session_id, return the connected stream.
-pub async fn connect_as_client(
-    relay_addr: &str,
-    target_session: &str,
-) -> io::Result<TcpStream> {
+pub async fn connect_as_client(relay_addr: &str, target_session: &str) -> io::Result<TcpStream> {
     let mut stream = TcpStream::connect(relay_addr).await?;
     let reg = Registration {
         role: Role::Client {

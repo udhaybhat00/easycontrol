@@ -1,8 +1,6 @@
 use crate::protocol::InputMsg;
 #[cfg(feature = "input")]
-use enigo::{
-    Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings,
-};
+use enigo::{Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use std::sync::Mutex;
 use thiserror::Error;
 
@@ -47,7 +45,9 @@ pub struct EnigoInjector {
 impl EnigoInjector {
     pub fn new() -> Result<Self, InputError> {
         Enigo::new(&Settings::default())
-            .map(|e| Self { enigo: Mutex::new(e) })
+            .map(|e| Self {
+                enigo: Mutex::new(e),
+            })
             .map_err(|e| InputError::Injection(e.to_string()))
     }
 }
@@ -64,7 +64,10 @@ impl Default for EnigoInjector {
 #[cfg(feature = "input")]
 impl InputInjector for EnigoInjector {
     fn inject(&self, msg: &InputMsg) -> Result<(), InputError> {
-        let mut enigo = self.enigo.lock().map_err(|e| InputError::Injection(e.to_string()))?;
+        let mut enigo = self
+            .enigo
+            .lock()
+            .map_err(|e| InputError::Injection(e.to_string()))?;
         match msg {
             InputMsg::MouseMove { x, y } => {
                 enigo
@@ -81,7 +84,8 @@ impl InputInjector for EnigoInjector {
                     3 => Button::Middle,
                     _ => Button::Left,
                 };
-                enigo.button(btn, Direction::Click)
+                enigo
+                    .button(btn, Direction::Click)
                     .map_err(|e| InputError::Injection(e.to_string()))?;
             }
             InputMsg::MouseRelease { button: _, x, y } => {
@@ -91,22 +95,26 @@ impl InputInjector for EnigoInjector {
             }
             InputMsg::MouseScroll { dx, dy } => {
                 if *dx != 0 {
-                    enigo.scroll(*dx, enigo::Axis::Horizontal)
+                    enigo
+                        .scroll(*dx, enigo::Axis::Horizontal)
                         .map_err(|e| InputError::Injection(e.to_string()))?;
                 }
                 if *dy != 0 {
-                    enigo.scroll(*dy, enigo::Axis::Vertical)
+                    enigo
+                        .scroll(*dy, enigo::Axis::Vertical)
                         .map_err(|e| InputError::Injection(e.to_string()))?;
                 }
             }
             InputMsg::KeyPress { code } => {
                 let key = key_from_code(*code);
-                enigo.key(key, Direction::Press)
+                enigo
+                    .key(key, Direction::Press)
                     .map_err(|e| InputError::Injection(e.to_string()))?;
             }
             InputMsg::KeyRelease { code } => {
                 let key = key_from_code(*code);
-                enigo.key(key, Direction::Release)
+                enigo
+                    .key(key, Direction::Release)
                     .map_err(|e| InputError::Injection(e.to_string()))?;
             }
             InputMsg::KeyType { text } => {
@@ -153,7 +161,10 @@ pub struct InputSession {
 
 impl InputSession {
     pub fn new(injector: Box<dyn InputInjector>) -> Self {
-        Self { injector, enabled: false }
+        Self {
+            injector,
+            enabled: false,
+        }
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
