@@ -4,6 +4,7 @@ use crate::crypto::{derive_session_key_from_dh, compute_dh_shared_secret, genera
 use crate::file_transfer::FileSession;
 use crate::input::InputSession;
 use crate::protocol::{Channel, ControlMsg, Frame, InputMsg};
+use crate::relay::{connect_as_client, connect_as_host, RelayServer};
 use crate::transport::Transport;
 use base64::Engine as _;
 use clap::{Parser, Subcommand};
@@ -11,6 +12,7 @@ use clap::{Parser, Subcommand};
 use getrandom::getrandom;
 use std::io::{self, Write};
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -39,6 +41,8 @@ enum Commands {
         _unattended_password: Option<String>,
         #[arg(long, default_value = "./easycontrol_files")]
         file_root: String,
+        #[arg(long)]
+        relay: Option<String>,
     },
     /// Connect to a host
     Connect {
@@ -48,9 +52,16 @@ enum Commands {
         session_id: Option<String>,
         #[arg(long)]
         password: Option<String>,
+        #[arg(long)]
+        relay: Option<String>,
     },
     /// Generate a new session identity
     Init,
+    /// Run a relay server for NAT traversal
+    Relay {
+        #[arg(long, default_value = "0.0.0.0:5901")]
+        listen: SocketAddr,
+    },
 }
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -61,11 +72,19 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Host { listen, _unattended_password, file_root } => {
-            host(listen, _unattended_password, file_root).await?;
+        Commands::Host { listen, _unattended_password, file_root, relay } => {
+            if let Some(relay_addr) = relay {
+                host_via_relay(&relay_addr, _unattended_password, file_root).await?;
+            } else {
+                host(listen, _unattended_password, file_root).await?;
+            }
         }
-        Commands::Connect { addr, session_id, password } => {
-            connect(addr, session_id, password).await?;
+        Commands::Connect { addr, session_id, password, relay } => {
+            if let Some(relay_addr) = relay {
+                connect_via_relay(&relay_addr, session_id, password).await?;
+            } else {
+                connect(addr, session_id, password).await?;
+            }
         }
         Commands::Init => {
             let mut secret = [0u8; SECRET_LEN];
@@ -80,6 +99,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             println!("{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&secret));
+        }
+        Commands::Relay { listen } => {
+            let server = RelayServer::new(listen);
+            server.run().await?;
         }
     }
 
@@ -333,6 +356,167 @@ async fn connect(
     info!("connected to session {}", sid);
 
     // --- Interactive loop: read stdin for input commands, print screen events ---
+    let stdin = tokio::io::stdin();
+    let mut lines = BufReader::new(stdin).lines();
+
+    println!("easycontrol client. Type commands:");
+    println!("  m <x> <y>   - move mouse");
+    println!("  c <x> <y>   - click");
+    println!("  k <code>    - press key");
+    println!("  t <text>    - type text");
+    println!("  q           - quit");
+    print!("> ");
+    io::stdout().flush()?;
+
+    let next_seq = Arc::new(AtomicU64::new(1));
+    let transport = Arc::new(Mutex::new(transport));
+
+    loop {
+        let line = match lines.next_line().await? {
+            Some(l) => l,
+            None => break,
+        };
+
+        let parts: Vec<&str> = line.trim().split_whitespace().collect();
+        if parts.is_empty() {
+            print!("> ");
+            io::stdout().flush()?;
+            continue;
+        }
+
+        match parts[0] {
+            "q" | "quit" => break,
+            "m" if parts.len() == 3 => {
+                let x: i32 = parts[1].parse().unwrap_or(0);
+                let y: i32 = parts[2].parse().unwrap_or(0);
+                let msg = InputMsg::MouseMove { x, y };
+                send_input(&transport, &mut cipher, &next_seq, msg).await?;
+            }
+            "c" if parts.len() == 3 => {
+                let x: i32 = parts[1].parse().unwrap_or(0);
+                let y: i32 = parts[2].parse().unwrap_or(0);
+                send_input(&transport, &mut cipher, &next_seq, InputMsg::MousePress { button: 1, x, y }).await?;
+                send_input(&transport, &mut cipher, &next_seq, InputMsg::MouseRelease { button: 1, x, y }).await?;
+            }
+            "k" if parts.len() == 2 => {
+                let code: u16 = parts[1].parse().unwrap_or(0);
+                send_input(&transport, &mut cipher, &next_seq, InputMsg::KeyPress { code }).await?;
+                send_input(&transport, &mut cipher, &next_seq, InputMsg::KeyRelease { code }).await?;
+            }
+            "t" if parts.len() >= 2 => {
+                let text = parts[1..].join(" ");
+                send_input(&transport, &mut cipher, &next_seq, InputMsg::KeyType { text }).await?;
+            }
+            _ => {
+                println!("unknown command");
+            }
+        }
+        print!("> ");
+        io::stdout().flush()?;
+    }
+
+    // Send Bye
+    let bye = ControlMsg::Bye { reason: "client disconnect".into() };
+    let bye_plain = bincode::serialize(&bye)?;
+    let bye_enc = cipher.encrypt(&bye_plain);
+    let bye_frame = Frame { channel: Channel::Control, seq: next_seq.fetch_add(1, Ordering::Relaxed), payload: bye_enc };
+    let mut t = transport.lock().await;
+    let _ = t.send_frame(&bye_frame).await;
+
+    Ok(())
+}
+
+async fn host_via_relay(
+    relay_addr: &str,
+    _unattended_password: Option<String>,
+    file_root: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut secret = [0u8; SECRET_LEN];
+    #[cfg(feature = "crypto")]
+    {
+        getrandom(&mut secret).expect("failed to get random bytes");
+    }
+    #[cfg(not(feature = "crypto"))]
+    {
+        for (i, b) in secret.iter_mut().enumerate() {
+            *b = i as u8;
+        }
+    }
+    let session_id = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&secret[..8]);
+    info!("easycontrol host via relay, session id: {}", session_id);
+
+    let stream = connect_as_host(relay_addr, &session_id).await?;
+    info!("registered with relay at {}", relay_addr);
+
+    let file_session = Arc::new(Mutex::new(FileSession::new(&file_root).await?));
+    let input_session = Arc::new(Mutex::new(InputSession::default()));
+
+    handle_peer(stream, "relay".parse().unwrap(), file_session, input_session, _unattended_password).await?;
+
+    Ok(())
+}
+
+async fn connect_via_relay(
+    relay_addr: &str,
+    session_id: Option<String>,
+    password: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let target_session = session_id.clone().ok_or("session id required for relay mode")?;
+    info!("connecting to relay {} for session {}", relay_addr, target_session);
+
+    let stream = connect_as_client(relay_addr, &target_session).await?;
+    info!("connected to relay, waiting for host...");
+
+    let mut transport = Transport::new(stream);
+
+    // --- Handshake (plaintext, then switch to encrypted after DH) ---
+    #[cfg(feature = "crypto")]
+    let (client_public, client_private) = generate_dh_keypair();
+    #[cfg(not(feature = "crypto"))]
+    let client_public: [u8; 32] = [0u8; 32];
+
+    let hello_frame = match transport.recv_frame().await? {
+        Some(Ok(f)) => f,
+        Some(Err(e)) => return Err(e.into()),
+        None => return Err("host closed during handshake".into()),
+    };
+
+    let hello: ControlMsg = bincode::deserialize(&hello_frame.payload)?;
+    let (sid, host_public_key) = match hello {
+        ControlMsg::Hello { session_id, public_key, .. } => (session_id, public_key),
+        _ => return Err("expected Hello from host".into()),
+    };
+
+    #[cfg(feature = "crypto")]
+    let (shared_secret, key_material) = {
+        let shared = compute_dh_shared_secret(&client_private, &host_public_key);
+        let km = derive_session_key_from_dh(&shared, &[]);
+        (shared, km)
+    };
+    #[cfg(not(feature = "crypto"))]
+    let key_material = derive_session_key(&[], &[]);
+
+    let mut cipher = SessionCipher::new(&key_material);
+
+    if let Some(expected) = &session_id {
+        if expected != &sid {
+            return Err(format!("session id mismatch: expected {}, got {}", expected, sid).into());
+        }
+    }
+
+    let ack = ControlMsg::HelloAck {
+        accepted: true,
+        fingerprint: fingerprint(&key_material[..32].try_into().unwrap()),
+        public_key: client_public,
+        password,
+    };
+    let ack_plain = bincode::serialize(&ack)?;
+    let ack_frame = Frame { channel: Channel::Control, seq: 0, payload: ack_plain };
+    transport.send_frame(&ack_frame).await?;
+
+    info!("connected to session {}", sid);
+
+    // --- Interactive loop ---
     let stdin = tokio::io::stdin();
     let mut lines = BufReader::new(stdin).lines();
 
