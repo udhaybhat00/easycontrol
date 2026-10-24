@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "EasyControl",
+  "version": "0.1.0",
+  "identifier": "com.easycontrol.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist",
+    "devUrl": "http://127.0.0.1:1420"
+  },
+  "app": {
+    "windows": [{ "label": "main", "title": "EasyControl", "width": 1200, "height": 800, "minWidth": 920, "minHeight": 640, "resizable": true }],
+    "security": { "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:1420; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" }
+  },
+  "bundle": { "active": true, "targets": "all", "category": "Utility" }
+}
