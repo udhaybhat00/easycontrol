@@ -50,7 +50,17 @@ impl SessionCipher {
         }
     }
 
-    /// Encrypt plaintext. Returns ct(plaintext + chacha_tag) + nonce(12) + mac_tag(16).
+    /// Client uses the opposite directional keys from the host.
+    pub fn for_role(material: &[u8; KEY_MATERIAL_LEN], is_host: bool) -> Self {
+        let mut cipher = Self::new(material);
+        if !is_host {
+            std::mem::swap(&mut cipher.enc_key, &mut cipher.dec_key);
+            std::mem::swap(&mut cipher.enc_mac_key, &mut cipher.dec_mac_key);
+        }
+        cipher
+    }
+
+    /// Encrypt plaintext. Returns ct(plaintext + chacha_tag) + nonce(12) + mac_tag(32).
     pub fn encrypt(&mut self, plaintext: &[u8]) -> Vec<u8> {
         let mut nonce = [0u8; NONCE_LEN];
         getrandom(&mut nonce).expect("failed to get random bytes");
@@ -83,11 +93,9 @@ impl SessionCipher {
         let (payload, tag) = ciphertext.split_at(payload_len);
 
         let mut mac = <HmacSha256 as hmac::Mac>::new_from_slice(&self.dec_mac_key).unwrap();
-        mac.update(&payload);
-        let expected = mac.finalize().into_bytes();
-        if tag != expected.as_slice() {
-            return Err(CryptoError::MacMismatch);
-        }
+        mac.update(payload);
+        mac.verify_slice(tag)
+            .map_err(|_| CryptoError::MacMismatch)?;
 
         let nonce_start = payload.len() - NONCE_LEN;
         let (ct, nonce) = payload.split_at(nonce_start);
@@ -118,7 +126,6 @@ pub fn fingerprint(key: &[u8; KEY_LEN]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest[..8])
 }
 
-#[cfg(feature = "crypto")]
 use getrandom::getrandom;
 
 #[cfg(test)]

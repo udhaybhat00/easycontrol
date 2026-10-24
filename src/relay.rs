@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use tokio::task;
+use tokio::task::JoinSet;
 use tokio::time;
 
 const REGISTRATION_TIMEOUT_SECS: u64 = 300; // 5 minutes
@@ -26,17 +26,26 @@ impl RelayServer {
 
     pub async fn run(self) -> io::Result<()> {
         let listener = TcpListener::bind(self.listen_addr).await?;
-        tracing::info!("relay server listening on {}", self.listen_addr);
-        let pending_hosts = self.pending_hosts;
+        self.run_listener(listener).await
+    }
 
+    pub(crate) async fn run_listener(self, listener: TcpListener) -> io::Result<()> {
+        tracing::info!("relay server listening on {}", listener.local_addr()?);
+        let pending_hosts = self.pending_hosts;
+        let mut peers = JoinSet::new();
         loop {
-            let (stream, peer) = listener.accept().await?;
-            let pending_hosts = pending_hosts.clone();
-            task::spawn(async move {
-                if let Err(e) = handle_relay_peer(stream, peer, pending_hosts).await {
-                    tracing::warn!("relay peer error from {}: {}", peer, e);
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let (stream, peer) = accepted?;
+                    let pending_hosts = pending_hosts.clone();
+                    peers.spawn(async move {
+                        if let Err(e) = handle_relay_peer(stream, peer, pending_hosts).await {
+                            tracing::warn!("relay peer error from {}: {}", peer, e);
+                        }
+                    });
                 }
-            });
+                _ = peers.join_next(), if !peers.is_empty() => {}
+            }
         }
     }
 }

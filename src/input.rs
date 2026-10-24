@@ -69,6 +69,17 @@ impl InputInjector for EnigoInjector {
             .lock()
             .map_err(|e| InputError::Injection(e.to_string()))?;
         match msg {
+            InputMsg::MouseClick { button } => {
+                let button = match button {
+                    1 => Button::Left,
+                    2 => Button::Right,
+                    3 => Button::Middle,
+                    _ => return Err(InputError::Injection("invalid mouse button".into())),
+                };
+                enigo
+                    .button(button, Direction::Click)
+                    .map_err(|e| InputError::Injection(e.to_string()))?;
+            }
             InputMsg::MouseMove { x, y } => {
                 enigo
                     .move_mouse(*x, *y, Coordinate::Abs)
@@ -160,6 +171,15 @@ pub struct InputSession {
 }
 
 impl InputSession {
+    /// Fallible OS backend initialization, so permission failures do not panic.
+    pub fn try_default() -> Result<Self, InputError> {
+        #[cfg(feature = "input")]
+        let injector: Box<dyn InputInjector> = Box::new(EnigoInjector::new()?);
+        #[cfg(not(feature = "input"))]
+        let injector: Box<dyn InputInjector> = Box::new(NullInjector);
+        Ok(Self::new(injector))
+    }
+
     pub fn new(injector: Box<dyn InputInjector>) -> Self {
         Self {
             injector,

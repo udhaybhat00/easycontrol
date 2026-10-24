@@ -5,12 +5,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
-pub struct Transport {
-    stream: TcpStream,
+pub struct Transport<S = TcpStream> {
+    stream: S,
     read_buf: BytesMut,
 }
 
-const MAX_READ_BUF: usize = 4 * 1024 * 1024; // 4 MiB max buffered read data
+const MAX_READ_BUF: usize = 64 * 1024 * 1024 + 4; // Match the protocol frame limit, including length prefix
 const READ_DEADLINE_SECS: u64 = 30;
 
 impl Transport {
@@ -30,6 +30,35 @@ impl Transport {
         }
     }
 
+    /// Split ownership so a pending receive never blocks outgoing traffic.
+    pub fn split(
+        self,
+    ) -> (
+        Transport<tokio::net::tcp::OwnedReadHalf>,
+        Transport<tokio::net::tcp::OwnedWriteHalf>,
+    ) {
+        let (reader, writer) = self.stream.into_split();
+        (
+            Transport {
+                stream: reader,
+                read_buf: self.read_buf,
+            },
+            Transport {
+                stream: writer,
+                read_buf: BytesMut::new(),
+            },
+        )
+    }
+
+    pub fn local_addr(&self) -> Result<std::net::SocketAddr, std::io::Error> {
+        self.stream.local_addr()
+    }
+    pub fn peer_addr(&self) -> Result<std::net::SocketAddr, std::io::Error> {
+        self.stream.peer_addr()
+    }
+}
+
+impl<S: tokio::io::AsyncWrite + Unpin> Transport<S> {
     pub async fn send_frame(&mut self, frame: &Frame) -> Result<(), std::io::Error> {
         let encoded = frame
             .encode()
@@ -42,6 +71,12 @@ impl Transport {
         Ok(())
     }
 
+    pub async fn shutdown(&mut self) -> Result<(), std::io::Error> {
+        self.stream.shutdown().await
+    }
+}
+
+impl<S: tokio::io::AsyncRead + Unpin> Transport<S> {
     pub async fn recv_frame(
         &mut self,
     ) -> Result<Option<Result<Frame, ProtocolError>>, std::io::Error> {
@@ -65,17 +100,5 @@ impl Transport {
                 return Ok(None);
             }
         }
-    }
-
-    pub async fn shutdown(&mut self) -> Result<(), std::io::Error> {
-        self.stream.shutdown().await
-    }
-
-    pub fn local_addr(&self) -> Result<std::net::SocketAddr, std::io::Error> {
-        self.stream.local_addr()
-    }
-
-    pub fn peer_addr(&self) -> Result<std::net::SocketAddr, std::io::Error> {
-        self.stream.peer_addr()
     }
 }

@@ -1,11 +1,12 @@
 use bytes::{Buf, BufMut, BytesMut};
 use serde::{Deserialize, Serialize};
-use std::io::{Read as _, Write as _};
+#[cfg(feature = "compression")]
+use std::io::Write as _;
 use thiserror::Error;
 
 const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
 /// Protocol version. Increment on any incompatible change to the handshake or frame format.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 #[derive(Debug, Error)]
 pub enum ProtocolError {
@@ -121,6 +122,7 @@ pub struct MonitorInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InputMsg {
+    MouseClick { button: u8 },
     MouseMove { x: i32, y: i32 },
     MousePress { button: u8, x: i32, y: i32 },
     MouseRelease { button: u8, x: i32, y: i32 },
