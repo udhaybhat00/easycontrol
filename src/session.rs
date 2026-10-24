@@ -130,6 +130,16 @@ pub enum SessionCommand {
     MouseClick {
         button: u8,
     },
+    MousePress {
+        button: u8,
+        x: i32,
+        y: i32,
+    },
+    MouseRelease {
+        button: u8,
+        x: i32,
+        y: i32,
+    },
     MouseScroll {
         dx: i32,
         dy: i32,
@@ -1209,6 +1219,26 @@ fn cmd_to_frame(
             seq,
             Channel::Input,
             &InputMsg::MouseClick { button: *button },
+        ),
+        SessionCommand::MousePress { button, x, y } => encrypted_frame(
+            cipher,
+            seq,
+            Channel::Input,
+            &InputMsg::MousePress {
+                button: *button,
+                x: *x,
+                y: *y,
+            },
+        ),
+        SessionCommand::MouseRelease { button, x, y } => encrypted_frame(
+            cipher,
+            seq,
+            Channel::Input,
+            &InputMsg::MouseRelease {
+                button: *button,
+                x: *x,
+                y: *y,
+            },
         ),
         SessionCommand::MouseScroll { dx, dy } => encrypted_frame(
             cipher,

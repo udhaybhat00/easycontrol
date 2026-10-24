@@ -96,12 +96,21 @@ impl InputInjector for EnigoInjector {
                     _ => Button::Left,
                 };
                 enigo
-                    .button(btn, Direction::Click)
+                    .button(btn, Direction::Press)
                     .map_err(|e| InputError::Injection(e.to_string()))?;
             }
-            InputMsg::MouseRelease { button: _, x, y } => {
+            InputMsg::MouseRelease { button, x, y } => {
                 enigo
                     .move_mouse(*x, *y, Coordinate::Abs)
+                    .map_err(|e| InputError::Injection(e.to_string()))?;
+                let btn = match *button {
+                    1 => Button::Left,
+                    2 => Button::Right,
+                    3 => Button::Middle,
+                    _ => return Err(InputError::Injection("invalid mouse button".into())),
+                };
+                enigo
+                    .button(btn, Direction::Release)
                     .map_err(|e| InputError::Injection(e.to_string()))?;
             }
             InputMsg::MouseScroll { dx, dy } => {

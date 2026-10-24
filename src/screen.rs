@@ -191,3 +191,59 @@ impl Default for ScreenSession {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TwoMonitors;
+
+    impl ScreenCapture for TwoMonitors {
+        fn monitors(&self) -> Result<Vec<MonitorInfo>, ScreenError> {
+            Ok(vec![
+                MonitorInfo {
+                    index: 0,
+                    x: 0,
+                    y: 0,
+                    width: 2,
+                    height: 1,
+                    primary: true,
+                },
+                MonitorInfo {
+                    index: 1,
+                    x: 2,
+                    y: 0,
+                    width: 3,
+                    height: 1,
+                    primary: false,
+                },
+            ])
+        }
+        fn capture(&mut self, monitor: usize) -> Result<Vec<u8>, ScreenError> {
+            Ok(vec![
+                monitor as u8;
+                self.dimensions(monitor)?.0 as usize * 4
+            ])
+        }
+        fn dimensions(&self, monitor: usize) -> Result<(u32, u32), ScreenError> {
+            match monitor {
+                0 => Ok((2, 1)),
+                1 => Ok((3, 1)),
+                _ => Err(ScreenError::MonitorNotFound(monitor)),
+            }
+        }
+    }
+
+    #[test]
+    fn selecting_a_monitor_changes_capture_dimensions_and_rejects_invalid_indices() {
+        let mut screen = ScreenSession::new(Box::new(TwoMonitors)).unwrap();
+        screen.select_monitor(1).unwrap();
+        assert_eq!(screen.current_monitor(), 1);
+        assert_eq!(screen.current_dimensions().unwrap(), (3, 1));
+        assert_eq!(screen.capture_frame().unwrap(), vec![1; 12]);
+        assert!(matches!(
+            screen.select_monitor(2),
+            Err(ScreenError::MonitorNotFound(2))
+        ));
+    }
+}

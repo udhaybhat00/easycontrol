@@ -10,8 +10,8 @@ pub mod session;
 pub mod transport;
 
 pub use session::{
-    CoreError, SessionCommand, SessionConfig, SessionEvent, SessionEvents, SessionHandle,
-    SessionManager, SessionState,
+    CoreError, MonitorInfo, SessionCommand, SessionConfig, SessionEvent, SessionEvents,
+    SessionHandle, SessionManager, SessionState,
 };
 
 pub use cli::run;

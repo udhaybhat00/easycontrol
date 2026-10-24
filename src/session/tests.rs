@@ -104,6 +104,22 @@ async fn direct_session_frames_input_chat_and_disconnect() {
         .await
         .unwrap();
     client
+        .send_command(SessionCommand::MousePress {
+            button: 1,
+            x: 12,
+            y: 34,
+        })
+        .await
+        .unwrap();
+    client
+        .send_command(SessionCommand::MouseRelease {
+            button: 1,
+            x: 12,
+            y: 34,
+        })
+        .await
+        .unwrap();
+    client
         .send_command(SessionCommand::KeyPress { code: 65 })
         .await
         .unwrap();
@@ -117,7 +133,7 @@ async fn direct_session_frames_input_chat_and_disconnect() {
         })
         .await
         .unwrap();
-    for index in 0..5 {
+    for index in 0..7 {
         let msg = timeout(Duration::from_secs(3), input.recv())
             .await
             .unwrap()
@@ -125,9 +141,25 @@ async fn direct_session_frames_input_chat_and_disconnect() {
         match (index, msg) {
             (0, InputMsg::MouseMove { x: 12, y: 34 })
             | (1, InputMsg::MouseClick { button: 1 })
-            | (2, InputMsg::KeyPress { code: 65 })
-            | (3, InputMsg::KeyRelease { code: 65 }) => {}
-            (4, InputMsg::KeyType { text }) if text == "hello" => {}
+            | (
+                2,
+                InputMsg::MousePress {
+                    button: 1,
+                    x: 12,
+                    y: 34,
+                },
+            )
+            | (
+                3,
+                InputMsg::MouseRelease {
+                    button: 1,
+                    x: 12,
+                    y: 34,
+                },
+            )
+            | (4, InputMsg::KeyPress { code: 65 })
+            | (5, InputMsg::KeyRelease { code: 65 }) => {}
+            (6, InputMsg::KeyType { text }) if text == "hello" => {}
             other => panic!("unexpected input: {other:?}"),
         }
     }
