@@ -1,8 +1,11 @@
 //! Core application logic for easycontrol.
+use crate::clipboard::{validate_bytes, ClipboardBackend, SystemClipboard};
 use crate::crypto::{derive_session_key, SessionCipher};
+use crate::file_transfer::FileSession;
 use crate::input::InputSession;
 use crate::protocol::{
-    Channel, ChatMsg, ClipboardMsg, ControlMsg, Frame, InputMsg, ScreenMsg, PROTOCOL_VERSION,
+    Channel, ChatMsg, ClipboardMsg, ControlMsg, FileMsg, Frame, InputMsg, ScreenMsg,
+    PROTOCOL_VERSION,
 };
 use crate::relay::{connect_as_client, connect_as_host, RelayServer};
 use crate::screen::ScreenSession;
@@ -18,6 +21,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tokio::task::JoinSet;
 use tracing::info;
+
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+const IDLE_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Configuration for starting an easycontrol session.
 #[derive(Debug, Clone)]
@@ -45,11 +51,11 @@ impl Default for SessionConfig {
             session_id: None,
             password: None,
             file_root: Some("./easycontrol_files".into()),
-            enable_input: true,
+            enable_input: false,
             enable_capture: true,
-            enable_clipboard: true,
-            enable_chat: true,
-            enable_file_transfer: true,
+            enable_clipboard: false,
+            enable_chat: false,
+            enable_file_transfer: false,
         }
     }
 }
@@ -77,6 +83,23 @@ pub enum SessionEvent {
         data: Vec<u8>,
         mime: String,
     },
+    FileList {
+        entries: Vec<crate::protocol::FileEntry>,
+    },
+    FileData {
+        path: String,
+        offset: u64,
+        data: Vec<u8>,
+    },
+    FileWritten {
+        path: String,
+        offset: u64,
+        bytes_written: u32,
+    },
+    PermissionDenied {
+        channel: Channel,
+        reason: String,
+    },
     ChatMessage {
         from: String,
         text: String,
@@ -100,16 +123,49 @@ pub struct MonitorInfo {
 /// Commands sent to a session.
 #[derive(Debug)]
 pub enum SessionCommand {
-    MouseMove { x: i32, y: i32 },
-    MouseClick { button: u8 },
-    MouseScroll { dx: i32, dy: i32 },
-    KeyPress { code: u16 },
-    KeyRelease { code: u16 },
-    KeyType { text: String },
+    MouseMove {
+        x: i32,
+        y: i32,
+    },
+    MouseClick {
+        button: u8,
+    },
+    MouseScroll {
+        dx: i32,
+        dy: i32,
+    },
+    KeyPress {
+        code: u16,
+    },
+    KeyRelease {
+        code: u16,
+    },
+    KeyType {
+        text: String,
+    },
     ClipboardGet,
-    ClipboardSet { text: String },
-    ChatMessage { text: String },
-    MonitorSelect { index: usize },
+    ClipboardSet {
+        text: String,
+    },
+    FileList {
+        path: String,
+    },
+    FileRead {
+        path: String,
+        offset: u64,
+        length: u32,
+    },
+    FileWrite {
+        path: String,
+        offset: u64,
+        data: Vec<u8>,
+    },
+    ChatMessage {
+        text: String,
+    },
+    MonitorSelect {
+        index: usize,
+    },
     Disconnect,
 }
 
@@ -250,11 +306,17 @@ pub struct SessionManager;
 
 impl SessionManager {
     pub async fn start_host(mut config: SessionConfig) -> Result<SessionHandle, CoreError> {
+        validate_password(config.password.as_deref())?;
         let stream = if let Some(relay) = config.relay_addr {
             let id = config.session_id.clone().unwrap_or_else(random_session_id);
             info!("registering relay session {}", id);
             config.session_id = Some(id.clone());
-            connect_as_host(&relay.to_string(), &id).await?
+            connect_as_host(
+                &relay.to_string(),
+                &id,
+                config.password.as_deref().expect("validated password"),
+            )
+            .await?
         } else {
             let addr = config
                 .listen_addr
@@ -266,12 +328,18 @@ impl SessionManager {
         Self::handle_peer(stream, config, true, None, None).await
     }
     pub async fn start_client(config: SessionConfig) -> Result<SessionHandle, CoreError> {
+        validate_password(config.password.as_deref())?;
         let stream = if let Some(relay) = config.relay_addr {
             let id = config
                 .session_id
                 .as_deref()
                 .ok_or_else(|| CoreError::Session("session_id required for relay mode".into()))?;
-            connect_as_client(&relay.to_string(), id).await?
+            connect_as_client(
+                &relay.to_string(),
+                id,
+                config.password.as_deref().expect("validated password"),
+            )
+            .await?
         } else {
             let addr = config.connect_addr.ok_or_else(|| {
                 CoreError::Session("connect_addr required for client mode".into())
@@ -302,6 +370,7 @@ impl SessionManager {
         screen: Option<ScreenSession>,
         input: Option<InputSession>,
     ) -> Result<SessionHandle, CoreError> {
+        validate_password(config.password.as_deref())?;
         let mut transport = Transport::new(stream);
         let authentication = async {
             let (id, mut cipher) = if is_host {
@@ -350,6 +419,23 @@ impl SessionManager {
         } else {
             None
         };
+        let files = if is_host && config.enable_file_transfer {
+            let root = config.file_root.clone().ok_or_else(|| {
+                CoreError::Session("file_root required when file transfer is enabled".into())
+            })?;
+            Some(Arc::new(
+                FileSession::new(root)
+                    .await
+                    .map_err(|error| CoreError::Session(error.to_string()))?,
+            ))
+        } else {
+            None
+        };
+        let clipboard: Option<Box<dyn ClipboardBackend>> = if is_host && config.enable_clipboard {
+            Some(Box::new(SystemClipboard))
+        } else {
+            None
+        };
         let (reader, writer) = transport.split();
         let writer = Arc::new(Mutex::new(writer));
         let cipher = Arc::new(Mutex::new(cipher));
@@ -383,11 +469,31 @@ impl SessionManager {
             }
             anyhow::Ok(())
         });
+        let heartbeat_writer = writer.clone();
+        let heartbeat_cipher = cipher.clone();
+        let heartbeat_seq = seq.clone();
+        tasks.spawn(async move {
+            let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
+            loop {
+                interval.tick().await;
+                send_channel_msg(
+                    &heartbeat_writer,
+                    &heartbeat_cipher,
+                    &heartbeat_seq,
+                    Channel::Control,
+                    &ControlMsg::Ping,
+                )
+                .await?;
+            }
+            #[allow(unreachable_code)]
+            anyhow::Ok(())
+        });
         let recv_writer = writer.clone();
         let recv_cipher = cipher.clone();
         let recv_seq = seq.clone();
         let recv_screen = screen.clone();
         let recv_events = event_tx.clone();
+        let recv_files = files.clone();
         tasks.spawn(async move {
             receive_loop(
                 reader,
@@ -396,6 +502,8 @@ impl SessionManager {
                 recv_seq,
                 recv_screen,
                 input,
+                recv_files,
+                clipboard,
                 recv_events,
                 config,
                 is_host,
@@ -542,14 +650,18 @@ async fn receive_loop(
     seq: Arc<AtomicU64>,
     screen: Option<Arc<Mutex<ScreenSession>>>,
     input: Option<InputSession>,
+    files: Option<Arc<FileSession>>,
+    mut clipboard: Option<Box<dyn ClipboardBackend>>,
     events: broadcast::Sender<SessionEvent>,
     config: SessionConfig,
     is_host: bool,
 ) -> anyhow::Result<()> {
     let mut last_seq = 1;
     let mut dimensions = None;
-    let mut clipboard = (Vec::new(), "text/plain".to_string());
-    while let Some(frame) = reader.recv_frame().await? {
+    while let Some(frame) = tokio::time::timeout(IDLE_TIMEOUT, reader.recv_frame())
+        .await
+        .map_err(|_| anyhow::anyhow!("connection idle timeout"))??
+    {
         let frame = frame?;
         let plain = decrypt_frame(&mut *cipher.lock().await, &frame, &mut last_seq)?;
         match frame.channel {
@@ -558,6 +670,9 @@ async fn receive_loop(
                 ControlMsg::Ping => {
                     send_channel_msg(&writer, &cipher, &seq, Channel::Control, &ControlMsg::Pong)
                         .await?
+                }
+                ControlMsg::Denied { channel, reason } => {
+                    let _ = events.send(SessionEvent::PermissionDenied { channel, reason });
                 }
                 _ => {}
             },
@@ -570,6 +685,16 @@ async fn receive_loop(
                         });
                     }
                 }
+            }
+            Channel::Input if is_host => {
+                deny(
+                    &writer,
+                    &cipher,
+                    &seq,
+                    Channel::Input,
+                    "remote input is disabled",
+                )
+                .await?
             }
             Channel::Screen => match bincode::deserialize::<ScreenMsg>(&plain)? {
                 ScreenMsg::FrameInit {
@@ -632,23 +757,66 @@ async fn receive_loop(
                 }
                 _ => {}
             },
-            Channel::Clipboard if config.enable_clipboard => {
+            Channel::Clipboard if is_host && config.enable_clipboard => {
                 match bincode::deserialize::<ClipboardMsg>(&plain)? {
                     ClipboardMsg::Get => {
+                        let (data, mime) = match clipboard
+                            .as_mut()
+                            .ok_or_else(|| anyhow::anyhow!("clipboard backend unavailable"))?
+                            .get_text()
+                        {
+                            Ok(text) => (text.into_bytes(), "text/plain".to_string()),
+                            Err(error) => {
+                                let _ = events.send(SessionEvent::Error {
+                                    message: error.to_string(),
+                                });
+                                (Vec::new(), "text/plain".to_string())
+                            }
+                        };
                         send_channel_msg(
                             &writer,
                             &cipher,
                             &seq,
                             Channel::Clipboard,
-                            &ClipboardMsg::GetAck {
-                                data: clipboard.0.clone(),
-                                mime: clipboard.1.clone(),
-                            },
+                            &ClipboardMsg::GetAck { data, mime },
                         )
                         .await?
                     }
                     ClipboardMsg::Set { data, mime } => {
-                        clipboard = (data.clone(), mime.clone());
+                        let text = match validate_bytes(&data) {
+                            Ok(text) => text,
+                            Err(error) => {
+                                deny(
+                                    &writer,
+                                    &cipher,
+                                    &seq,
+                                    Channel::Clipboard,
+                                    &error.to_string(),
+                                )
+                                .await?;
+                                continue;
+                            }
+                        };
+                        if mime != "text/plain" {
+                            deny(
+                                &writer,
+                                &cipher,
+                                &seq,
+                                Channel::Clipboard,
+                                "only text/plain is supported",
+                            )
+                            .await?;
+                            continue;
+                        }
+                        if let Err(error) = clipboard
+                            .as_mut()
+                            .ok_or_else(|| anyhow::anyhow!("clipboard backend unavailable"))?
+                            .set_text(text)
+                        {
+                            let _ = events.send(SessionEvent::Error {
+                                message: error.to_string(),
+                            });
+                        }
                         let _ = events.send(SessionEvent::ClipboardData { data, mime });
                     }
                     ClipboardMsg::GetAck { data, mime } => {
@@ -656,10 +824,140 @@ async fn receive_loop(
                     }
                 }
             }
+            Channel::Clipboard if is_host => {
+                deny(
+                    &writer,
+                    &cipher,
+                    &seq,
+                    Channel::Clipboard,
+                    "clipboard sharing is disabled",
+                )
+                .await?
+            }
+            Channel::Clipboard if !is_host => match bincode::deserialize::<ClipboardMsg>(&plain)? {
+                ClipboardMsg::GetAck { data, mime } => {
+                    let text = validate_bytes(&data)
+                        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                    if mime != "text/plain" {
+                        return Err(anyhow::anyhow!("unsupported clipboard MIME type"));
+                    }
+                    let _ = events.send(SessionEvent::ClipboardData {
+                        data: text.as_bytes().to_vec(),
+                        mime,
+                    });
+                }
+                _ => return Err(anyhow::anyhow!("unexpected clipboard request from host")),
+            },
             Channel::Chat if config.enable_chat => {
                 let ChatMsg::Message { from, text, .. } = bincode::deserialize(&plain)?;
                 let _ = events.send(SessionEvent::ChatMessage { from, text });
             }
+            Channel::Chat if is_host => {
+                deny(&writer, &cipher, &seq, Channel::Chat, "chat is disabled").await?
+            }
+            Channel::File if is_host && config.enable_file_transfer => {
+                let file = files
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("file backend unavailable"))?;
+                match bincode::deserialize::<FileMsg>(&plain)? {
+                    FileMsg::ListDir { path } => match file.list_dir(&path).await {
+                        Ok(entries) => {
+                            send_channel_msg(
+                                &writer,
+                                &cipher,
+                                &seq,
+                                Channel::File,
+                                &FileMsg::ListDirAck { entries },
+                            )
+                            .await?
+                        }
+                        Err(error) => {
+                            deny(&writer, &cipher, &seq, Channel::File, &error.to_string()).await?
+                        }
+                    },
+                    FileMsg::ReadRequest {
+                        path,
+                        offset,
+                        length,
+                    } => match file.read_chunk(&path, offset, length).await {
+                        Ok(data) => {
+                            send_channel_msg(
+                                &writer,
+                                &cipher,
+                                &seq,
+                                Channel::File,
+                                &FileMsg::ReadData { path, offset, data },
+                            )
+                            .await?
+                        }
+                        Err(error) => {
+                            deny(&writer, &cipher, &seq, Channel::File, &error.to_string()).await?
+                        }
+                    },
+                    FileMsg::WriteRequest { path, offset, data } => {
+                        match file.write_chunk(&path, offset, &data).await {
+                            Ok(bytes_written) => {
+                                send_channel_msg(
+                                    &writer,
+                                    &cipher,
+                                    &seq,
+                                    Channel::File,
+                                    &FileMsg::WriteAck {
+                                        path,
+                                        offset,
+                                        bytes_written,
+                                    },
+                                )
+                                .await?
+                            }
+                            Err(error) => {
+                                deny(&writer, &cipher, &seq, Channel::File, &error.to_string())
+                                    .await?
+                            }
+                        }
+                    }
+                    _ => {
+                        deny(
+                            &writer,
+                            &cipher,
+                            &seq,
+                            Channel::File,
+                            "unexpected file response",
+                        )
+                        .await?
+                    }
+                }
+            }
+            Channel::File if is_host => {
+                deny(
+                    &writer,
+                    &cipher,
+                    &seq,
+                    Channel::File,
+                    "file transfer is disabled",
+                )
+                .await?
+            }
+            Channel::File if !is_host => match bincode::deserialize::<FileMsg>(&plain)? {
+                FileMsg::ListDirAck { entries } => {
+                    let _ = events.send(SessionEvent::FileList { entries });
+                }
+                FileMsg::ReadData { path, offset, data } => {
+                    let _ = events.send(SessionEvent::FileData { path, offset, data });
+                }
+                FileMsg::WriteAck {
+                    path,
+                    offset,
+                    bytes_written,
+                } => {
+                    let _ = events.send(SessionEvent::FileWritten {
+                        path,
+                        offset,
+                        bytes_written,
+                    });
+                }
+                _ => return Err(anyhow::anyhow!("unexpected file request from host")),
+            },
             _ => {}
         }
     }
@@ -670,6 +968,15 @@ fn random_session_id() -> String {
     let mut bytes = [0; 32];
     getrandom::getrandom(&mut bytes).expect("OS randomness unavailable");
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn validate_password(password: Option<&str>) -> Result<(), CoreError> {
+    match password {
+        Some(value) if !value.trim().is_empty() => Ok(()),
+        _ => Err(CoreError::Session(
+            "a non-empty password is required for unattended access".into(),
+        )),
+    }
 }
 
 const CLIENT_IDENTITY: &[u8] = b"easycontrol-v4-client";
@@ -720,6 +1027,26 @@ async fn send_channel_msg<T: serde::Serialize>(
     let frame = encrypted_frame(&mut *cipher.lock().await, seq, channel, msg)?;
     writer.send_frame(&frame).await?;
     Ok(())
+}
+
+async fn deny(
+    writer: &Writer,
+    cipher: &Arc<Mutex<SessionCipher>>,
+    next_seq: &AtomicU64,
+    channel: Channel,
+    reason: &str,
+) -> anyhow::Result<()> {
+    send_channel_msg(
+        writer,
+        cipher,
+        next_seq,
+        Channel::Control,
+        &ControlMsg::Denied {
+            channel,
+            reason: reason.into(),
+        },
+    )
+    .await
 }
 
 async fn read_handshake(transport: &mut Transport) -> anyhow::Result<Frame> {
@@ -917,6 +1244,36 @@ fn cmd_to_frame(
             &ClipboardMsg::Set {
                 data: text.as_bytes().to_vec(),
                 mime: "text/plain".into(),
+            },
+        ),
+        SessionCommand::FileList { path } => encrypted_frame(
+            cipher,
+            seq,
+            Channel::File,
+            &FileMsg::ListDir { path: path.clone() },
+        ),
+        SessionCommand::FileRead {
+            path,
+            offset,
+            length,
+        } => encrypted_frame(
+            cipher,
+            seq,
+            Channel::File,
+            &FileMsg::ReadRequest {
+                path: path.clone(),
+                offset: *offset,
+                length: *length,
+            },
+        ),
+        SessionCommand::FileWrite { path, offset, data } => encrypted_frame(
+            cipher,
+            seq,
+            Channel::File,
+            &FileMsg::WriteRequest {
+                path: path.clone(),
+                offset: *offset,
+                data: data.clone(),
             },
         ),
         SessionCommand::ChatMessage { text } => encrypted_frame(

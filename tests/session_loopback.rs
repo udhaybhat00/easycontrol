@@ -14,6 +14,7 @@ async fn public_direct_connection_and_bidirectional_events() {
             password: Some("loopback password".into()),
             enable_input: false,
             enable_capture: false,
+            enable_chat: true,
             ..SessionConfig::default()
         };
         let client_config = SessionConfig {
@@ -21,6 +22,7 @@ async fn public_direct_connection_and_bidirectional_events() {
             password: Some("loopback password".into()),
             enable_input: false,
             enable_capture: false,
+            enable_chat: true,
             ..SessionConfig::default()
         };
         drop(reservation);

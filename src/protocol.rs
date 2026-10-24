@@ -6,7 +6,7 @@ use thiserror::Error;
 
 const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
 /// Protocol version. Increment on any incompatible change to the handshake or frame format.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 #[derive(Debug, Error)]
 pub enum ProtocolError {
@@ -76,6 +76,10 @@ pub enum ControlMsg {
         file: bool,
         clipboard: bool,
         chat: bool,
+    },
+    Denied {
+        channel: Channel,
+        reason: String,
     },
     Confirm {
         confirmed: bool,

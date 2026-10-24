@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod clipboard;
 pub mod crypto;
 pub mod file_transfer;
 pub mod input;

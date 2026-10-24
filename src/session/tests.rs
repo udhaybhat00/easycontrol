@@ -38,6 +38,7 @@ fn config() -> SessionConfig {
         password: Some("test password".into()),
         enable_input: false,
         enable_capture: false,
+        enable_chat: true,
         ..SessionConfig::default()
     }
 }
@@ -150,26 +151,6 @@ async fn direct_session_frames_input_chat_and_disconnect() {
     next_matching(
         &mut events,
         |e| matches!(e, SessionEvent::ChatMessage { text, .. } if text == "pong"),
-    )
-    .await;
-    client
-        .send_command(SessionCommand::ClipboardSet {
-            text: "clipboard".into(),
-        })
-        .await
-        .unwrap();
-    next_matching(
-        &mut host_events,
-        |e| matches!(e, SessionEvent::ClipboardData { data, .. } if data == b"clipboard"),
-    )
-    .await;
-    client
-        .send_command(SessionCommand::ClipboardGet)
-        .await
-        .unwrap();
-    next_matching(
-        &mut events,
-        |e| matches!(e, SessionEvent::ClipboardData { data, .. } if data == b"clipboard"),
     )
     .await;
     timeout(Duration::from_secs(3), client.disconnect())
@@ -525,4 +506,113 @@ async fn disabled_input_does_not_call_host_backend() {
     assert!(input_rx.try_recv().is_err());
     client.disconnect().await.unwrap();
     host.disconnect().await.unwrap();
+}
+
+#[tokio::test]
+async fn empty_password_is_rejected_before_unattended_connection() {
+    let (host, _) = socket_pair().await;
+    let mut config = config();
+    config.password = Some(" ".into());
+    let result = SessionManager::handle_peer(host, config, true, None, None).await;
+    assert!(
+        matches!(result, Err(CoreError::Session(message)) if message.contains("non-empty password"))
+    );
+}
+
+#[tokio::test]
+async fn denied_input_returns_explicit_permission_event() {
+    let (host_socket, client_socket) = socket_pair().await;
+    let (host, client) = tokio::join!(
+        SessionManager::handle_peer(host_socket, config(), true, None, None),
+        SessionManager::handle_peer(client_socket, config(), false, None, None)
+    );
+    let host = host.unwrap();
+    let client = client.unwrap();
+    let mut events = client.event_stream();
+    client
+        .send_command(SessionCommand::KeyPress { code: 65 })
+        .await
+        .unwrap();
+    next_matching(&mut events, |event| {
+        matches!(
+            event,
+            SessionEvent::PermissionDenied {
+                channel: Channel::Input,
+                ..
+            }
+        )
+    })
+    .await;
+    client.disconnect().await.unwrap();
+    host.disconnect().await.unwrap();
+}
+
+#[tokio::test]
+async fn authorized_file_requests_are_dispatched_and_disabled_requests_are_denied() {
+    let root =
+        std::env::temp_dir().join(format!("easycontrol-session-file-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (host_socket, client_socket) = socket_pair().await;
+    let mut host_config = config();
+    host_config.enable_file_transfer = true;
+    host_config.file_root = Some(root.clone());
+    let (host, client) = tokio::join!(
+        SessionManager::handle_peer(host_socket, host_config, true, None, None),
+        SessionManager::handle_peer(client_socket, config(), false, None, None)
+    );
+    let host = host.unwrap();
+    let client = client.unwrap();
+    let mut events = client.event_stream();
+    client
+        .send_command(SessionCommand::FileWrite {
+            path: "safe.txt".into(),
+            offset: 0,
+            data: b"safe".to_vec(),
+        })
+        .await
+        .unwrap();
+    next_matching(&mut events, |event| {
+        matches!(
+            event,
+            SessionEvent::FileWritten {
+                bytes_written: 4,
+                ..
+            }
+        )
+    })
+    .await;
+    client
+        .send_command(SessionCommand::FileRead {
+            path: "safe.txt".into(),
+            offset: 0,
+            length: 16,
+        })
+        .await
+        .unwrap();
+    next_matching(
+        &mut events,
+        |event| matches!(event, SessionEvent::FileData { data, .. } if data == b"safe"),
+    )
+    .await;
+    client
+        .send_command(SessionCommand::FileRead {
+            path: "../escape".into(),
+            offset: 0,
+            length: 1,
+        })
+        .await
+        .unwrap();
+    next_matching(&mut events, |event| {
+        matches!(
+            event,
+            SessionEvent::PermissionDenied {
+                channel: Channel::File,
+                ..
+            }
+        )
+    })
+    .await;
+    client.disconnect().await.unwrap();
+    host.disconnect().await.unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }

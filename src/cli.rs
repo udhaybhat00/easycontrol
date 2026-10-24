@@ -294,6 +294,10 @@ async fn run_client_loop(handle: SessionHandle) -> Result<(), Box<dyn std::error
                             print!("> ");
                             io::stdout().flush()?;
                         }
+                        SessionEvent::FileList { entries } => println!("\nReceived {} file entries", entries.len()),
+                        SessionEvent::FileData { path, offset, data } => println!("\nReceived {} bytes from {} at {}", data.len(), path, offset),
+                        SessionEvent::FileWritten { path, offset, bytes_written } => println!("\nWrote {} bytes to {} at {}", bytes_written, path, offset),
+                        SessionEvent::PermissionDenied { channel, reason } => println!("\nPermission denied for {:?}: {}", channel, reason),
                         SessionEvent::ChatMessage { from, text } => {
                             println!("\n[chat from {}] {}", from, text);
                             print!("> ");

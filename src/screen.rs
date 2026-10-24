@@ -79,8 +79,8 @@ impl ScreenCapture for XcapCapture {
         let monitors = XcapMonitor::all().map_err(|e| ScreenError::Capture(e.to_string()))?;
         let mut out = Vec::with_capacity(monitors.len());
         for (i, mon) in monitors.into_iter().enumerate() {
-            let x = mon.x().map_err(|e| ScreenError::Capture(e.to_string()))? as i32;
-            let y = mon.y().map_err(|e| ScreenError::Capture(e.to_string()))? as i32;
+            let x = mon.x().map_err(|e| ScreenError::Capture(e.to_string()))?;
+            let y = mon.y().map_err(|e| ScreenError::Capture(e.to_string()))?;
             let width = mon
                 .width()
                 .map_err(|e| ScreenError::Capture(e.to_string()))?;
@@ -175,7 +175,7 @@ impl ScreenSession {
 
 #[cfg(feature = "capture")]
 pub fn default_capture() -> Box<dyn ScreenCapture> {
-    Box::new(XcapCapture::default())
+    Box::new(XcapCapture)
 }
 
 #[cfg(not(feature = "capture"))]
