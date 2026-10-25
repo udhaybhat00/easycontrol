@@ -7,7 +7,11 @@ import "./production.css";
 
 function Bootstrap() {
   const [ready, setReady] = useState(false);
-  useEffect(() => { const timer = window.setTimeout(() => setReady(true), 1600); return () => window.clearTimeout(timer); }, []);
+  useEffect(() => {
+    // A brief brand transition only; never hold the usable workspace hostage.
+    const timer = window.setTimeout(() => setReady(true), 850);
+    return () => window.clearTimeout(timer);
+  }, []);
   return ready ? <App /> : <SplashScreen />;
 }
 
