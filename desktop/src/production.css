@@ -82,3 +82,48 @@ button:disabled { color: #8f9bad !important; background: #1d2735 !important; bor
 .splash-progress i { display:block; width:34%; height:100%; border-radius:inherit; background:linear-gradient(90deg,#3d7ef2,#77b5ff); animation:splash-progress 1.35s ease-in-out infinite; }
 .splash-card small { position:absolute; left:0; right:0; top:calc(50% + 205px); display:block; margin:0; color:#aebed3; font-size:11px; }
 .splash-orbit span { position:absolute; left:50%; top:50%; width:360px; height:360px; border:1px solid #4c78c42b; border-radius:50%; transform:translate(-50%,-50%); animation:splash-glow 2.5s ease-in-out infinite; }.splash-orbit span:nth-child(2){width:520px;height:520px;animation-delay:.35s}.splash-orbit span:nth-child(3){width:720px;height:720px;animation-delay:.7s}
+
+/* Restrained desktop theme: a small, deliberate surface scale and one red accent. */
+:root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #fff; background: #090909; font-synthesis: none; text-rendering: optimizeLegibility; }
+html, body, #root, .shell, .content { background: #090909 !important; }
+.shell { background: #090909 !important; }
+.shell aside { background: #101010 !important; border-right: 1px solid #343434 !important; }
+.content { color: #fff !important; }
+.content h1, .card h2, .brand, .sidebar-foot strong { color: #fff !important; }
+.content h1 { font-size: 32px !important; font-weight: 680 !important; letter-spacing: -.035em !important; }
+.header-subtitle, .card p, .settings > p { color: #c4c4c4 !important; }
+.brand small, .sidebar-foot small, .preference-grid small, .empty small { color: #a6a6a6 !important; }
+.workspace-label { color: #888 !important; }
+.shell nav { gap: 6px !important; }
+.shell nav button { min-height: 44px; color: #e4e4e4 !important; border: 1px solid transparent !important; border-radius: 8px !important; }
+.shell nav button:hover { color: #fff !important; background: #1b1b1b !important; border-color: #373737 !important; transform: none !important; }
+.shell nav .active { color: #fff !important; background: #c93640 !important; border-color: #f0767d !important; box-shadow: inset 3px 0 #fff1f2 !important; }
+.sidebar-foot { background: #171717 !important; border-color: #383838 !important; }
+.eyebrow, .card-title svg, .about-details svg { color: #ef5b64 !important; }
+.status, .build-badge { color: #f0f0f0 !important; background: #151515 !important; border-color: #3e3e3e !important; box-shadow: none !important; }
+.card { background: #151515 !important; border-color: #383838 !important; border-radius: 10px !important; box-shadow: none !important; }
+.card:hover { border-color: #555 !important; box-shadow: none !important; transform: none !important; }
+.card-title { color: #d6d6d6 !important; }
+.card-title em { color: #9ce0c3 !important; background: #15342b !important; }
+.card input { color: #fff !important; background: #0d0d0d !important; border-color: #454545 !important; border-radius: 7px !important; }
+.card input::placeholder { color: #929292 !important; }
+.card input:focus { border-color: #df4b55 !important; box-shadow: 0 0 0 3px #df4b5530 !important; }
+.primary { background: #ce3843 !important; box-shadow: none !important; }
+.primary:hover { background: #df4b55 !important; filter: none !important; transform: none !important; }
+.secondary { color: #fff !important; background: #242424 !important; border-color: #4a4a4a !important; }
+.secondary:hover { background: #303030 !important; }
+.card-foot, .host-row label { color: #c8c8c8 !important; border-color: #393939 !important; }
+.security, .empty, .host-status, .viewer-toolbar, .permission-row, .host-permissions label { color: #dedede !important; }
+.empty, .host-status, .viewer-toolbar { background: #0e0e0e !important; border-color: #383838 !important; }
+.permission-row, .host-permissions label, .settings .toggle { border-color: #373737 !important; }
+.permission-row b, .host-permissions small, .permission-row small, .settings .toggle small { color: #b0b0b0 !important; }
+.viewer-toolbar label, .viewer-toolbar span, .tool, .preference-grid div { color: #e8e8e8 !important; background: #1a1a1a !important; border-color: #3d3d3d !important; }
+.tool.active { border-color: #ef5b64 !important; color: #fff !important; }
+.settings .switch { background: #444 !important; }
+.settings .switch.on { background: #ce3843 !important; }
+.about-hero, .about-details > * { border-color: #3b3b3b !important; }
+.about-details > * { background: #0e0e0e !important; }
+.about-details > *:hover { background: #191919 !important; border-color: #666 !important; transform: none !important; }
+.about-details span, .about-footer { color: #aaa !important; }
+.about-details strong { color: #fff !important; }
+.about-details small { color: #c2c2c2 !important; }
