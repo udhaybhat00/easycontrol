@@ -4,6 +4,7 @@ use easycontrol::{
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::process::Command;
 use std::time::Instant;
 use tauri::{ipc::Response, AppHandle, Emitter, Manager, State};
 use tokio::sync::{Mutex, RwLock};
@@ -266,6 +267,31 @@ fn request_screen_recording_permission() -> bool {
 #[tauri::command]
 fn open_privacy_settings(kind: String) -> Result<(), String> {
     permissions::open_settings(&kind)
+}
+
+#[tauri::command]
+fn open_creator_profile(profile: String) -> Result<(), String> {
+    let url = match profile.as_str() {
+        "github" => "https://github.com/udhaybhat00",
+        "linkedin" => "https://in.linkedin.com/in/udhaybhat",
+        _ => return Err("Unknown creator profile".into()),
+    };
+    #[cfg(target_os = "macos")]
+    Command::new("open")
+        .arg(url)
+        .spawn()
+        .map_err(|error| format!("Could not open the browser: {error}"))?;
+    #[cfg(target_os = "windows")]
+    Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn()
+        .map_err(|error| format!("Could not open the browser: {error}"))?;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    Command::new("xdg-open")
+        .arg(url)
+        .spawn()
+        .map_err(|error| format!("Could not open the browser: {error}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -561,6 +587,7 @@ fn main() {
             desktop_permissions,
             request_screen_recording_permission,
             open_privacy_settings,
+            open_creator_profile,
             host_session_status,
             available_monitors,
             latest_frame,

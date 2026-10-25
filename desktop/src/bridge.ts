@@ -32,6 +32,7 @@ export const core = {
   desktopPermissions: () => invoke<DesktopPermissions>("desktop_permissions"),
   requestScreenRecording: () => invoke<boolean>("request_screen_recording_permission"),
   openPrivacySettings: (kind: "screen" | "accessibility") => invoke<void>("open_privacy_settings", { kind }),
+  openCreatorProfile: (profile: "github" | "linkedin") => invoke<void>("open_creator_profile", { profile }),
   hostSessionStatus: () => invoke<HostSessionStatus>("host_session_status"),
   monitors: () => invoke<RemoteMonitor[]>("available_monitors"),
   selectMonitor: (index: number) => invoke<void>("select_remote_monitor", { index }),
