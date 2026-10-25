@@ -519,6 +519,22 @@ async fn start_host(
     Ok(())
 }
 
+/// Returns the active interface address that would be used for a direct LAN
+/// connection. This only discovers a local address; it does not change the
+/// session transport or establish a remote connection.
+#[tauri::command]
+fn local_network_endpoint(port: u16) -> Result<String, String> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").map_err(|error| error.to_string())?;
+    socket
+        .connect("192.0.2.1:80")
+        .map_err(|error| error.to_string())?;
+    let address = socket.local_addr().map_err(|error| error.to_string())?;
+    if address.ip().is_unspecified() {
+        return Err("No LAN address is available".into());
+    }
+    Ok(format!("{}:{port}", address.ip()))
+}
+
 #[tauri::command]
 async fn disconnect(state: State<'_, AppState>) -> Result<(), String> {
     if let Some(task) = state.host_task.lock().await.take() {
@@ -580,6 +596,7 @@ fn main() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             start_host,
+            local_network_endpoint,
             connect,
             disconnect,
             connection_status,

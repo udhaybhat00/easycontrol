@@ -27,6 +27,7 @@ export const core = {
   status: () => invoke<Status>("connection_status"),
   connect: (address: string, password: string, permissions: Permissions) => invoke<void>("connect", { address, password, permissions }),
   startHost: (port: number, password: string, permissions: Permissions) => invoke<void>("start_host", { port, password, permissions }),
+  localNetworkEndpoint: (port: number) => invoke<string>("local_network_endpoint", { port }),
   disconnect: () => invoke<void>("disconnect"),
   configurePermissions: (permissions: Permissions) => invoke<void>("configure_permissions", { permissions }),
   desktopPermissions: () => invoke<DesktopPermissions>("desktop_permissions"),
