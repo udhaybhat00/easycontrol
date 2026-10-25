@@ -14,7 +14,7 @@ use base64::Engine as _;
 use spake2::{Ed25519Group, Identity, Password, Spake2};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StateMutex};
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
@@ -251,6 +251,9 @@ pub struct SessionInner {
     event_tx: broadcast::Sender<SessionEvent>,
     shutdown_tx: watch::Sender<bool>,
     done: watch::Receiver<bool>,
+    is_host: bool,
+    input_allowed: Arc<AtomicBool>,
+    input: Arc<Mutex<Option<InputSession>>>,
 }
 
 impl Drop for SessionInner {
@@ -295,6 +298,30 @@ impl SessionHandle {
             .send(cmd)
             .await
             .map_err(|_| CoreError::Session("session closed".into()))
+    }
+    /// Host-only, immediate input policy control. Enabling requires that the
+    /// local OS input backend can be initialized; clients cannot call this.
+    pub async fn set_remote_input_enabled(&self, enabled: bool) -> Result<(), CoreError> {
+        if !self.inner.is_host {
+            return Err(CoreError::Session(
+                "only the host can approve remote input".into(),
+            ));
+        }
+        let mut input = self.inner.input.lock().await;
+        if enabled && input.is_none() {
+            *input = Some(
+                InputSession::try_default()
+                    .map_err(|error| CoreError::Session(error.to_string()))?,
+            );
+        }
+        if let Some(input) = input.as_mut() {
+            input.set_enabled(enabled);
+        }
+        self.inner.input_allowed.store(enabled, Ordering::Release);
+        Ok(())
+    }
+    pub fn remote_input_enabled(&self) -> bool {
+        self.inner.input_allowed.load(Ordering::Acquire)
     }
     /// Wait until workers have exited and the socket halves have been dropped.
     pub async fn disconnect(&self) -> Result<(), CoreError> {
@@ -416,7 +443,8 @@ impl SessionManager {
             });
             Arc::new(Mutex::new(screen))
         });
-        // Create the OS input backend only when enabled, and only on the host.
+        // Input is host-owned. A disabled host can initialize its backend only
+        // when the local user later approves remote control.
         let input = if is_host && config.enable_input {
             let mut input = match input {
                 Some(input) => input,
@@ -429,6 +457,8 @@ impl SessionManager {
         } else {
             None
         };
+        let input = Arc::new(Mutex::new(input));
+        let input_allowed = Arc::new(AtomicBool::new(is_host && config.enable_input));
         let files = if is_host && config.enable_file_transfer {
             let root = config.file_root.clone().ok_or_else(|| {
                 CoreError::Session("file_root required when file transfer is enabled".into())
@@ -463,6 +493,9 @@ impl SessionManager {
                 event_tx: event_tx.clone(),
                 shutdown_tx,
                 done,
+                is_host,
+                input_allowed: input_allowed.clone(),
+                input: input.clone(),
             }),
         };
         let mut tasks = JoinSet::new();
@@ -512,6 +545,7 @@ impl SessionManager {
                 recv_seq,
                 recv_screen,
                 input,
+                input_allowed,
                 recv_files,
                 clipboard,
                 recv_events,
@@ -659,7 +693,8 @@ async fn receive_loop(
     cipher: Arc<Mutex<SessionCipher>>,
     seq: Arc<AtomicU64>,
     screen: Option<Arc<Mutex<ScreenSession>>>,
-    input: Option<InputSession>,
+    input: Arc<Mutex<Option<InputSession>>>,
+    input_allowed: Arc<AtomicBool>,
     files: Option<Arc<FileSession>>,
     mut clipboard: Option<Box<dyn ClipboardBackend>>,
     events: broadcast::Sender<SessionEvent>,
@@ -686,9 +721,9 @@ async fn receive_loop(
                 }
                 _ => {}
             },
-            Channel::Input if is_host && config.enable_input => {
+            Channel::Input if is_host && input_allowed.load(Ordering::Acquire) => {
                 let msg: InputMsg = bincode::deserialize(&plain)?;
-                if let Some(input) = &input {
+                if let Some(input) = input.lock().await.as_ref() {
                     if let Err(e) = input.inject(&msg) {
                         let _ = events.send(SessionEvent::Error {
                             message: e.to_string(),

@@ -19,6 +19,17 @@ struct Permissions {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct HostSessionStatus {
+    active: bool,
+    screen_sharing: bool,
+    remote_input: bool,
+    clipboard: bool,
+    file_transfer: bool,
+    peer: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Status {
     state: String,
     detail: String,
@@ -77,6 +88,7 @@ struct AppState {
     status: RwLock<Status>,
     frames: RwLock<FrameStore>,
     monitors: RwLock<Vec<CoreMonitorInfo>>,
+    host: RwLock<bool>,
 }
 
 impl Default for AppState {
@@ -97,6 +109,7 @@ impl Default for AppState {
             }),
             frames: RwLock::new(FrameStore::default()),
             monitors: RwLock::new(Vec::new()),
+            host: RwLock::new(false),
         }
     }
 }
@@ -227,8 +240,47 @@ async fn configure_permissions(
     state: State<'_, AppState>,
     permissions: Permissions,
 ) -> Result<(), String> {
+    let previous = state.permissions.read().await.clone();
+    if *state.host.read().await && previous.input != permissions.input {
+        if let Some(handle) = state.session.lock().await.clone() {
+            handle
+                .set_remote_input_enabled(permissions.input)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+    }
     *state.permissions.write().await = permissions;
     Ok(())
+}
+
+#[tauri::command]
+fn desktop_permissions() -> permissions::DesktopPermissions {
+    permissions::status()
+}
+
+#[tauri::command]
+fn request_screen_recording_permission() -> bool {
+    permissions::request_screen_recording()
+}
+
+#[tauri::command]
+fn open_privacy_settings(kind: String) -> Result<(), String> {
+    permissions::open_settings(&kind)
+}
+
+#[tauri::command]
+async fn host_session_status(state: State<'_, AppState>) -> Result<HostSessionStatus, String> {
+    let host = *state.host.read().await;
+    let permissions = state.permissions.read().await.clone();
+    let active = host && state.session.lock().await.is_some();
+    Ok(HostSessionStatus {
+        active,
+        screen_sharing: active,
+        remote_input: host && permissions.input,
+        clipboard: host && permissions.clipboard,
+        file_transfer: host && permissions.file_transfer,
+        peer: None,
+    })
 }
 
 #[tauri::command]
@@ -335,6 +387,7 @@ async fn connect(
         return Err("A non-empty session password is required".into());
     }
     clear_viewer_state(&state).await;
+    *state.host.write().await = false;
     set_status(
         &state,
         Status {
@@ -380,6 +433,7 @@ async fn start_host(
         return Err("A host is already starting or active".into());
     }
     clear_viewer_state(&state).await;
+    *state.host.write().await = true;
     set_status(
         &state,
         Status {
@@ -414,6 +468,7 @@ async fn start_host(
             }
             Err(error) => {
                 let state_ref = app_clone.state::<AppState>();
+                *state_ref.host.write().await = false;
                 set_status(
                     &state_ref,
                     Status {
@@ -459,6 +514,7 @@ async fn disconnect(state: State<'_, AppState>) -> Result<(), String> {
     )
     .await;
     clear_viewer_state(&state).await;
+    *state.host.write().await = false;
     Ok(())
 }
 
@@ -502,6 +558,10 @@ fn main() {
             disconnect,
             connection_status,
             configure_permissions,
+            desktop_permissions,
+            request_screen_recording_permission,
+            open_privacy_settings,
+            host_session_status,
             available_monitors,
             latest_frame,
             frame_stats,
@@ -536,3 +596,4 @@ mod tests {
         assert!(state.frames.read().await.latest.is_none());
     }
 }
+mod permissions;

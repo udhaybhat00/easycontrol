@@ -580,6 +580,45 @@ async fn denied_input_returns_explicit_permission_event() {
 }
 
 #[tokio::test]
+async fn host_can_revoke_and_restore_input_during_an_active_session() {
+    let (host, client, mut input) = pair().await;
+    host.set_remote_input_enabled(false).await.unwrap();
+    assert!(!host.remote_input_enabled());
+    let mut events = client.event_stream();
+    client
+        .send_command(SessionCommand::KeyPress { code: 65 })
+        .await
+        .unwrap();
+    next_matching(&mut events, |event| {
+        matches!(
+            event,
+            SessionEvent::PermissionDenied {
+                channel: Channel::Input,
+                ..
+            }
+        )
+    })
+    .await;
+    assert!(input.try_recv().is_err());
+    host.set_remote_input_enabled(true).await.unwrap();
+    assert!(host.remote_input_enabled());
+    client
+        .send_command(SessionCommand::KeyPress { code: 65 })
+        .await
+        .unwrap();
+    assert!(matches!(
+        timeout(Duration::from_secs(3), input.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        InputMsg::KeyPress { code: 65 }
+    ));
+    assert!(client.set_remote_input_enabled(true).await.is_err());
+    client.disconnect().await.unwrap();
+    host.disconnect().await.unwrap();
+}
+
+#[tokio::test]
 async fn authorized_file_requests_are_dispatched_and_disabled_requests_are_denied() {
     let root =
         std::env::temp_dir().join(format!("easycontrol-session-file-{}", std::process::id()));

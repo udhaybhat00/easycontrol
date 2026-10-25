@@ -3,6 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 
 export type Permissions = { input: boolean; clipboard: boolean; fileTransfer: boolean; chat: boolean };
 export type Status = { state: string; detail: string; sessionId?: string };
+export type DesktopPermissions = { platform: string; screenRecording: string; accessibility: string; inputMonitoring: string };
+export type HostSessionStatus = { active: boolean; screenSharing: boolean; remoteInput: boolean; clipboard: boolean; fileTransfer: boolean; peer?: string };
 export type CoreEvent = { kind: string; detail?: string; sessionId?: string };
 export type RemoteMonitor = { index: number; x: number; y: number; width: number; height: number; primary: boolean };
 export type ViewerInput =
@@ -27,6 +29,10 @@ export const core = {
   startHost: (port: number, password: string, permissions: Permissions) => invoke<void>("start_host", { port, password, permissions }),
   disconnect: () => invoke<void>("disconnect"),
   configurePermissions: (permissions: Permissions) => invoke<void>("configure_permissions", { permissions }),
+  desktopPermissions: () => invoke<DesktopPermissions>("desktop_permissions"),
+  requestScreenRecording: () => invoke<boolean>("request_screen_recording_permission"),
+  openPrivacySettings: (kind: "screen" | "accessibility") => invoke<void>("open_privacy_settings", { kind }),
+  hostSessionStatus: () => invoke<HostSessionStatus>("host_session_status"),
   monitors: () => invoke<RemoteMonitor[]>("available_monitors"),
   selectMonitor: (index: number) => invoke<void>("select_remote_monitor", { index }),
   latestFrame: (afterSequence: number) => invoke<Uint8Array>("latest_frame", { afterSequence }),
