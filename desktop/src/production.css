@@ -46,3 +46,15 @@ html, body, #root { background: #0b0f15; }
 .settings > p { color: #c1ccda !important; }
 .preference-grid div { color: #d4ddea !important; background: #111925 !important; border-color: #334158 !important; }
 .preference-grid small { color: #aab7c9 !important; }
+@keyframes splash-in { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes splash-glow { 0%,100% { transform: scale(.94); opacity:.35; } 50% { transform: scale(1.08); opacity:.75; } }
+@keyframes splash-progress { from { transform: translateX(-105%); } to { transform: translateX(360%); } }
+.splash { min-height:100vh; display:grid; place-items:center; overflow:hidden; position:relative; background:radial-gradient(circle at 50% 38%,#1c3156 0%,#101928 32%,#0b0f15 72%); }
+.splash-card { position:relative; z-index:1; width:360px; text-align:center; animation:splash-in .55s cubic-bezier(.2,.8,.2,1) both; }
+.splash-card img { width:92px; height:92px; object-fit:cover; border-radius:23px; box-shadow:0 22px 48px #0008; }
+.splash-wordmark { margin-top:19px; font-size:26px; font-weight:760; letter-spacing:-.035em; color:#fff; }
+.splash-card p { margin:9px 0 25px; color:#b8c7dc; font-size:13px; }
+.splash-progress { height:3px; overflow:hidden; border-radius:999px; background:#2a3a52; }
+.splash-progress i { display:block; width:34%; height:100%; border-radius:inherit; background:linear-gradient(90deg,#3d7ef2,#77b5ff); animation:splash-progress 1.35s ease-in-out infinite; }
+.splash-card small { display:block; margin-top:13px; color:#8494aa; font-size:11px; }
+.splash-orbit span { position:absolute; left:50%; top:50%; width:360px; height:360px; border:1px solid #4c78c42b; border-radius:50%; transform:translate(-50%,-50%); animation:splash-glow 2.5s ease-in-out infinite; }.splash-orbit span:nth-child(2){width:520px;height:520px;animation-delay:.35s}.splash-orbit span:nth-child(3){width:720px;height:720px;animation-delay:.7s}
