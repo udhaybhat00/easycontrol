@@ -1,0 +1,48 @@
+/* Final visual layer: intentional graphite workspace with accessible contrast. */
+:root { color: #f7f9fc; background: #0b0f15; }
+html, body, #root { background: #0b0f15; }
+.shell { background: radial-gradient(900px 540px at 72% -18%, #1d2b47 0%, transparent 58%), #0b0f15; }
+.shell aside { background: #151b26; border-color: #2b3546; }
+.content { color: #f7f9fc; }
+.content h1 { color: #f7f9fc !important; }
+.header-subtitle { color: #b5c0d0 !important; }
+.brand { color: #fff !important; }
+.brand small { color: #a9b6c8 !important; }
+.workspace-label { color: #77869c !important; }
+.shell nav button { color: #c3ccda !important; }
+.shell nav button:hover { color: #fff !important; background: #202a3a !important; }
+.shell nav .active { color: #fff !important; background: linear-gradient(90deg, #e34b52, #c93440) !important; border-color: #f2787f !important; }
+.sidebar-foot { background: #202938 !important; border-color: #364357 !important; }
+.sidebar-foot strong { color: #fff !important; }
+.sidebar-foot small { color: #aab7c9 !important; }
+.eyebrow { color: #ff656c !important; }
+.status { color: #dce5f2 !important; background: #151e2d !important; border-color: #34445d !important; }
+.build-badge { color: #cbd5e2 !important; background: #1a2331 !important; border-color: #35445b !important; }
+.card { background: linear-gradient(145deg, #182131, #131a26) !important; border-color: #344359 !important; box-shadow: 0 16px 38px #00000035 !important; }
+.card:hover { border-color: #4b5f7c !important; box-shadow: 0 20px 42px #00000045 !important; }
+.card-title { color: #c7d2e1 !important; }
+.card-title svg { color: #ff5b62 !important; }
+.card-title em { color: #8ee1c4 !important; background: #123e38 !important; }
+.card h2 { color: #f7f9fc !important; }
+.card p { color: #bdc8d8 !important; }
+.card input { color: #f4f7fb !important; background: #0d131d !important; border-color: #3a4a63 !important; }
+.card input::placeholder { color: #8290a5 !important; }
+.card input:focus { border-color: #4f8cff !important; box-shadow: 0 0 0 3px #4f8cff2b !important; }
+.primary { color: #fff !important; background: linear-gradient(135deg, #3e78e8, #2458c8) !important; box-shadow: 0 10px 22px #1d4cac55 !important; }
+.secondary { color: #edf2fa !important; background: #263b62 !important; border-color: #466797 !important; }
+.host-row label, .card-foot, .card-foot strong { color: #c1ccda !important; }
+.card-foot { border-color: #344257 !important; }
+.security { color: #d4deeb !important; }
+.security svg { color: #53d9ae !important; }
+.empty { color: #cbd5e1 !important; background: #0e141e !important; }
+.empty small { color: #91a0b6 !important; }
+.host-status, .viewer-toolbar { background: #101722 !important; border-color: #334258 !important; color: #d0d9e6 !important; }
+.viewer-toolbar label, .viewer-toolbar span, .tool { color: #d5deec !important; background: #182131 !important; border-color: #3b4a61 !important; }
+.tool.active { color: #fff !important; border-color: #ff5b62 !important; }
+.permission-row, .host-permissions label { color: #d0dae8 !important; border-color: #334158 !important; }
+.permission-row b, .host-permissions small, .permission-row small { color: #aab7c9 !important; }
+.link-button { color: #ff6c72 !important; }
+.notice { color: #ffd9dc !important; background: #44252d !important; border-color: #a44b58 !important; }
+.settings > p { color: #c1ccda !important; }
+.preference-grid div { color: #d4ddea !important; background: #111925 !important; border-color: #334158 !important; }
+.preference-grid small { color: #aab7c9 !important; }
