@@ -1,6 +1,7 @@
 use crate::protocol::InputMsg;
 #[cfg(feature = "input")]
 use enigo::{Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
+#[cfg(feature = "input")]
 use std::sync::Mutex;
 use thiserror::Error;
 

@@ -122,7 +122,16 @@ impl ScreenCapture for XcapCapture {
         let height = mon
             .height()
             .map_err(|e| ScreenError::Capture(e.to_string()))?;
-        Ok((width, height))
+        // xcap reports display bounds in macOS points while capture_image()
+        // returns physical Retina pixels. Frame metadata must describe the
+        // byte buffer, otherwise receivers correctly reject the frame.
+        let scale = mon
+            .scale_factor()
+            .map_err(|e| ScreenError::Capture(e.to_string()))?;
+        Ok((
+            (width as f32 * scale).round() as u32,
+            (height as f32 * scale).round() as u32,
+        ))
     }
 }
 
@@ -245,5 +254,15 @@ mod tests {
             screen.select_monitor(2),
             Err(ScreenError::MonitorNotFound(2))
         ));
+    }
+
+    #[cfg(all(feature = "capture", target_os = "macos"))]
+    #[test]
+    #[ignore = "requires a macOS Screen Recording grant"]
+    fn macos_capture_dimensions_match_frame_bytes() {
+        let mut capture = XcapCapture::new().expect("macOS capture backend should initialize");
+        let (width, height) = capture.dimensions(0).expect("primary display dimensions");
+        let bytes = capture.capture(0).expect("primary display frame");
+        assert_eq!(bytes.len(), width as usize * height as usize * 4);
     }
 }

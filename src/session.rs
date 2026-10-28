@@ -499,6 +499,7 @@ impl SessionManager {
             }),
         };
         let mut tasks = JoinSet::new();
+        let cleanup_input = input.clone();
         let send_writer = writer.clone();
         let send_cipher = cipher.clone();
         let send_seq = seq.clone();
@@ -595,6 +596,15 @@ impl SessionManager {
                                 },
                             )
                             .await?;
+                            // Retina frames can be tens of megabytes. Use the existing
+                            // protocol compression flag when it reduces the payload so a
+                            // bounded viewer can receive a frame before the next capture.
+                            let compressed_data = crate::protocol::compress_payload(&data)?;
+                            let (data, compressed) = if compressed_data.len() < data.len() {
+                                (compressed_data, true)
+                            } else {
+                                (data, false)
+                            };
                             send_channel_msg(
                                 &capture_writer,
                                 &capture_cipher,
@@ -603,7 +613,7 @@ impl SessionManager {
                                 &ScreenMsg::FrameData {
                                     seq: 0,
                                     data,
-                                    compressed: false,
+                                    compressed,
                                 },
                             )
                             .await?;
@@ -651,6 +661,10 @@ impl SessionManager {
             })
             .await;
             drop(writer);
+            // A handle may outlive the workers. Release the OS-backed input
+            // backend here so disconnect does not retain an injector or its
+            // resources until the last handle is dropped.
+            *cleanup_input.lock().await = None;
             *state.lock().unwrap() = SessionState::Disconnected;
             let _ = event_tx.send(SessionEvent::Disconnected { reason });
             let _ = done_tx.send(true);

@@ -191,6 +191,17 @@ fn forward_events(app: AppHandle, handle: SessionHandle) {
                 },
                 SessionEvent::Disconnected { reason } => {
                     clear_viewer_state(&state).await;
+                    *state.session.lock().await = None;
+                    *state.host.write().await = false;
+                    set_status(
+                        &state,
+                        Status {
+                            state: "idle".into(),
+                            detail: reason.clone(),
+                            session_id: None,
+                        },
+                    )
+                    .await;
                     FrontendEvent {
                         kind: "disconnected".into(),
                         detail: Some(reason),
@@ -480,6 +491,10 @@ async fn start_host(
             Ok(handle) => {
                 let id = handle.id().to_string();
                 let state_ref = app_clone.state::<AppState>();
+                // `start_host` returns after the accepted peer is authenticated. The
+                // listener task is therefore complete; leaving its JoinHandle in
+                // AppState would incorrectly prevent the next host session.
+                state_ref.host_task.lock().await.take();
                 *state_ref.session.lock().await = Some(handle.clone());
                 set_status(
                     &state_ref,
@@ -494,6 +509,7 @@ async fn start_host(
             }
             Err(error) => {
                 let state_ref = app_clone.state::<AppState>();
+                state_ref.host_task.lock().await.take();
                 *state_ref.host.write().await = false;
                 set_status(
                     &state_ref,
