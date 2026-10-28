@@ -1,30 +1,493 @@
 <!doctype html>
-<html lang="en"><head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Documentation — EasyControl</title><meta name="description" content="Build EasyControl on macOS, configure permissions, establish a direct LAN session, and understand the Rust architecture and current validation boundaries.">
-  <meta name="theme-color" content="#18181b"><meta name="color-scheme" content="dark light">
-  <link rel="canonical" href="__SITE_URL__/docs.html"><link rel="icon" href="assets/logo.png" type="image/png"><link rel="stylesheet" href="styles.css"><script src="app.js" defer></script>
-</head><body>
-  <a class="skip-link" href="#main">Skip to documentation</a>
-  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs><symbol id="arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol><symbol id="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></symbol></defs></svg>
-  <header class="site-header"><div class="nav-wrap wrap"><a class="brand" href="./"><img src="assets/logo.png" width="34" height="34" alt=""><span>EasyControl</span></a><button class="menu-toggle icon-button" aria-label="Open navigation" aria-expanded="false" aria-controls="navigation"><span></span><span></span></button><nav id="navigation" class="navigation" aria-label="Main navigation"><a href="index.html#workspace">The workspace</a><a href="index.html#security">Security</a><a href="docs.html" aria-current="page">Documentation</a><span class="nav-divider"></span><button class="theme-toggle icon-button" aria-label="Change color theme" title="Change color theme"><svg><use href="#sun"/></svg></button><a class="nav-cta" href="#quick-start">Get started <svg><use href="#arrow"/></svg></a></nav></div></header>
-  <main id="main" class="docs-shell wrap">
-    <aside class="docs-nav" aria-label="Documentation navigation"><label for="docs-search" class="docs-search-label">Find a topic</label><input id="docs-search" class="docs-search" type="search" placeholder="Search documentation…" autocomplete="off"><p id="search-message" class="search-message" role="status" aria-live="polite"></p><div class="docs-label">Documentation</div><nav class="docs-nav-links" aria-label="On this page"><a href="#overview">Overview</a><a href="#quick-start">Build for macOS</a><a href="#permissions">macOS permissions</a><a href="#first-session">Your first session</a><a href="#security">Security model</a><a href="#architecture">Architecture</a><a href="#validation">Validation &amp; status</a><a href="#troubleshooting">Troubleshooting</a><a href="#contributing">Contribute</a></nav></aside>
-    <div class="docs-content">
-      <section id="overview" data-doc-section><span class="eyebrow">EasyControl / Documentation</span><h1>A shorter path<br>to the other screen.</h1><p class="docs-lead">Build the app, connect directly, and understand what runs underneath. Start here.</p><div class="callout"><p><strong>Development software, not a production release.</strong> Real macOS capture and rendering have been observed, but real input validation and public distribution checks remain. There is no public signed installer yet.</p></div><p>EasyControl is a Rust remote-desktop engine with a Tauri 2, React and TypeScript interface. The desktop currently targets direct LAN sessions using a numeric IP address and port, SPAKE2 password authentication and encrypted protocol v5 traffic.</p><p>The application source repository currently requires access. Build commands below assume you have access to <a href="https://github.com/udhaybhat00/easycontrol">the application repository</a>. The <a href="https://github.com/udhaybhat00/easycontrol-website">website repository</a> is public. Contact <a href="https://github.com/udhaybhat00">Udhay Bhat</a> for application access.</p></section>
-      <section id="quick-start" data-doc-section><h2>Build for macOS</h2><p>Use Rust stable, Node.js 20+ with npm, and the native tools required by Tauri. Optimized builds are recommended for real frame-throughput testing.</p><ul><li>macOS with Xcode Command Line Tools.</li><li>Rust stable, Cargo, rustfmt and Clippy.</li><li>Node.js 20 or newer and npm.</li><li>Access to the EasyControl application repository.</li></ul><p>For current toolchain setup, use the official <a href="https://v2.tauri.app/start/prerequisites/">Tauri prerequisites</a> and <a href="https://www.rust-lang.org/tools/install">Rust installation guide</a>.</p>
-      <div class="code-block"><div class="code-header"><span>Terminal · clone and install</span><button type="button" class="copy-button" data-copy="code-clone" aria-label="Copy clone and install commands">Copy</button></div><pre><code id="code-clone">git clone https://github.com/udhaybhat00/easycontrol.git
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Documentation — EasyControl</title>
+    <meta
+      name="description"
+      content="Build EasyControl on macOS, configure permissions, establish a direct LAN session, and understand the Rust architecture and current validation boundaries."
+    />
+    <meta name="theme-color" content="#18181b" />
+    <meta name="color-scheme" content="dark light" />
+    <link rel="canonical" href="__SITE_URL__/docs.html" />
+    <link rel="icon" href="assets/logo.png" type="image/png" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to documentation</a>
+    <svg
+      class="icon-library"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <defs>
+        <symbol id="arrow" viewBox="0 0 24 24">
+          <path d="M5 12h14m-6-6 6 6-6 6" />
+        </symbol>
+        <symbol id="sun" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="4" />
+          <path
+            d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"
+          />
+        </symbol>
+      </defs>
+    </svg>
+    <header class="site-header">
+      <div class="nav-wrap wrap">
+        <a class="brand" href="./"
+          ><img src="assets/logo.png" width="34" height="34" alt="" /><span
+            >EasyControl</span
+          ></a
+        ><button
+          class="menu-toggle icon-button"
+          aria-label="Open navigation"
+          aria-expanded="false"
+          aria-controls="navigation"
+        >
+          <span></span><span></span>
+        </button>
+        <nav id="navigation" class="navigation" aria-label="Main navigation">
+          <a href="index.html#workspace">The workspace</a
+          ><a href="index.html#security">Security</a
+          ><a href="docs.html" aria-current="page">Documentation</a
+          ><span class="nav-divider"></span
+          ><button
+            class="theme-toggle icon-button"
+            aria-label="Change color theme"
+            title="Change color theme"
+          >
+            <svg><use href="#sun" /></svg></button
+          ><a class="nav-cta" href="#quick-start"
+            >Get started <svg><use href="#arrow" /></svg
+          ></a>
+        </nav>
+      </div>
+    </header>
+    <main id="main" class="docs-shell wrap">
+      <aside class="docs-nav" aria-label="Documentation navigation">
+        <label for="docs-search" class="docs-search-label">Find a topic</label
+        ><input
+          id="docs-search"
+          class="docs-search"
+          type="search"
+          placeholder="Search documentation…"
+          autocomplete="off"
+        />
+        <p
+          id="search-message"
+          class="search-message"
+          role="status"
+          aria-live="polite"
+        ></p>
+        <div class="docs-label">Documentation</div>
+        <nav class="docs-nav-links" aria-label="On this page">
+          <a href="#overview">Overview</a
+          ><a href="#quick-start">Build for macOS</a
+          ><a href="#permissions">macOS permissions</a
+          ><a href="#first-session">Your first session</a
+          ><a href="#security">Security model</a
+          ><a href="#architecture">Architecture</a
+          ><a href="#validation">Validation &amp; status</a
+          ><a href="#troubleshooting">Troubleshooting</a
+          ><a href="#contributing">Contribute</a>
+        </nav>
+      </aside>
+      <div class="docs-content">
+        <section id="overview" data-doc-section>
+          <span class="eyebrow">EasyControl / Documentation</span>
+          <h1>A shorter path<br />to the other screen.</h1>
+          <p class="docs-lead">
+            Build the app, connect directly, and understand what runs
+            underneath. Start here.
+          </p>
+          <div class="callout">
+            <p>
+              <strong>Development software, not a production release.</strong>
+              Real macOS capture and rendering have been observed, but real
+              input validation and public distribution checks remain. There is
+              no public signed installer yet.
+            </p>
+          </div>
+          <p>
+            EasyControl is a Rust remote-desktop engine with a Tauri 2, React
+            and TypeScript interface. The desktop currently targets direct LAN
+            sessions using a numeric IP address and port, SPAKE2 password
+            authentication and encrypted protocol v5 traffic.
+          </p>
+          <p>
+            The application source repository currently requires access. Build
+            commands below assume you have access to
+            <a href="https://github.com/udhaybhat00/easycontrol"
+              >the application repository</a
+            >. The
+            <a href="https://github.com/udhaybhat00/easycontrol-website"
+              >website repository</a
+            >
+            is public. Contact
+            <a href="https://github.com/udhaybhat00">Udhay Bhat</a> for
+            application access.
+          </p>
+        </section>
+        <section id="quick-start" data-doc-section>
+          <h2>Build for macOS</h2>
+          <p>
+            Use Rust stable, Node.js 20+ with npm, and the native tools required
+            by Tauri. Optimized builds are recommended for real frame-throughput
+            testing.
+          </p>
+          <ul>
+            <li>macOS with Xcode Command Line Tools.</li>
+            <li>Rust stable, Cargo, rustfmt and Clippy.</li>
+            <li>Node.js 20 or newer and npm.</li>
+            <li>Access to the EasyControl application repository.</li>
+          </ul>
+          <p>
+            For current toolchain setup, use the official
+            <a href="https://v2.tauri.app/start/prerequisites/"
+              >Tauri prerequisites</a
+            >
+            and
+            <a href="https://www.rust-lang.org/tools/install"
+              >Rust installation guide</a
+            >.
+          </p>
+          <div class="code-block">
+            <div class="code-header">
+              <span>Terminal · clone and install</span
+              ><button
+                type="button"
+                class="copy-button"
+                data-copy="code-clone"
+                aria-label="Copy clone and install commands"
+              >
+                Copy
+              </button>
+            </div>
+            <pre><code id="code-clone">git clone https://github.com/udhaybhat00/easycontrol.git
 cd easycontrol/desktop
 npm ci
-npm run tauri:dev</code></pre></div>
-      <h3>Create an optimized app and DMG</h3><div class="code-block"><div class="code-header"><span>Terminal · from easycontrol/desktop</span><button type="button" class="copy-button" data-copy="code-build" aria-label="Copy macOS build command">Copy</button></div><pre><code id="code-build">npm run tauri:build</code></pre></div><p>Artifacts are written under <code>desktop/src-tauri/target/release/bundle/</code>. The app is in <code>macos/</code> and the disk image in <code>dmg/</code>. Architecture-specific filenames depend on the build target.</p><div class="callout"><p><strong>Local signing is different from distribution.</strong> Ad-hoc builds can need fresh macOS grants after replacement. Use the same Apple Development signing identity through <code>APPLE_SIGNING_IDENTITY</code> for repeat local testing. Public distribution still needs Developer ID signing, notarization and installation testing on a clean Mac. Keep signing credentials out of source control.</p></div>
-      <h3>Isolated same-Mac QA client</h3><p>The QA profile has a separate application name, bundle identifier and storage namespace. It reuses the same Rust core and frontend.</p><div class="code-block"><div class="code-header"><span>Terminal · from easycontrol/desktop</span><button type="button" class="copy-button" data-copy="code-qa" aria-label="Copy isolated QA build command">Copy</button></div><pre><code id="code-qa">npm run tauri:build -- --bundles app \
-  --config src-tauri/tauri.qa.conf.json</code></pre></div><p>Do not distribute the QA app as a production artifact. Keep input disabled during recursive same-Mac capture unless a controlled target and explicit host approval are in place.</p></section>
-      <section id="permissions" data-doc-section><h2>macOS permissions</h2><p>Open <strong>System Settings → Privacy &amp; Security</strong> and grant access to the exact installed host app. EasyControl uses supported OS APIs and never bypasses these controls.</p><div class="docs-table-wrap"><table class="docs-table"><thead><tr><th>Permission</th><th>When needed</th></tr></thead><tbody><tr><td>Screen Recording</td><td>On the host, before actual screen capture. Quit and reopen the app after granting it.</td></tr><tr><td>Accessibility</td><td>On the host, before approved mouse or keyboard injection.</td></tr><tr><td>Input Monitoring</td><td>Not required by the current backend; EasyControl does not observe global keystrokes.</td></tr></tbody></table></div><p>The desktop Settings page reports these grants. A QA client that only views frames does not need host capture/input permissions. If the QA app hosts, its grants are separate.</p><p>A listening socket is not proof that screen capture is authorized. Check actual sharing status and rendered application content. Wallpaper-only frames from stale grants are not a successful capture test.</p></section>
-      <section id="first-session" data-doc-section><h2>Your first direct session</h2><ol><li><strong>Start on the host.</strong> Open Home → Share this computer. Use port <code>5899</code> unless you need another port in <code>1024–65535</code>.</li><li><strong>Share credentials carefully.</strong> Start the host, copy its displayed LAN endpoint and share the session password with the intended person through a trusted channel.</li><li><strong>Connect on the client.</strong> Enter the host’s numeric IP address and port, then its password. The interface keeps passwords out of saved devices and history.</li><li><strong>Check the screen.</strong> The authenticated connection begins view-only. Screen Recording must be granted on the host for real frames.</li><li><strong>Approve only when appropriate.</strong> The host’s Approve control action enables its input backend. The client must also enable sending input. The host can revoke it at any time.</li><li><strong>End the session.</strong> Disconnect from either side. The host returns to stopped after the session ends; start it again for a new session.</li></ol><p>For an isolated same-Mac QA client, use <code>127.0.0.1:5899</code>. That loopback address does not connect to a different computer. Between machines, use the host’s real LAN endpoint and a reachable network path.</p><p>No cloud device-ID service, discovery or automatic NAT traversal is provided. Avoid exposing a development host directly to the internet.</p></section>
-      <section id="security" data-doc-section><h2>Security model</h2><p>Authentication and encryption run in Rust. The frontend controls the session API and does not implement a parallel networking stack.</p><ul><li><strong>Authentication:</strong> SPAKE2 with encrypted key confirmation.</li><li><strong>Session encryption:</strong> ChaCha20-Poly1305 with directional key material derived through HKDF-SHA256.</li><li><strong>Protocol:</strong> version 5, with bounded message/decompression handling.</li><li><strong>Host authority:</strong> desktop input starts denied; approval and revocation are enforced by the host.</li><li><strong>Frame isolation:</strong> bounded latest-frame delivery is scoped to the active authenticated session.</li><li><strong>Local storage:</strong> saved addresses, devices, history and appearance; no persisted session passwords.</li><li><strong>No public frame endpoint:</strong> native binary IPC connects Rust to the viewer.</li></ul><div class="callout"><p><strong>Encryption is not a completed security audit.</strong> Independent review, real input denial tests and distribution validation remain release requirements. Unattended or high-risk deployment is not recommended at this stage.</p></div><p>Report a sensitive issue privately to the maintainer through <a href="https://github.com/udhaybhat00">GitHub</a> before publishing exploit details. Do not attach session credentials, clipboard contents or private captured screens.</p></section>
-      <section id="architecture" data-doc-section><h2>One engine. A thin desktop shell.</h2><div class="architecture" aria-label="Architecture: React and TypeScript UI, Tauri commands and binary frame IPC, Rust sessions and protocol, and OS backends"><div>React + TypeScript · dashboard and viewer</div><span aria-hidden="true">↕</span><div>Tauri commands / events · bounded binary frame IPC</div><span aria-hidden="true">↕</span><div>Rust · SessionManager / SessionHandle / protocol v5</div><span aria-hidden="true">↕</span><div>OS capture + input · authenticated TCP transport</div></div><p>The viewer decodes actual RGBA frames and maps input into monitor coordinate bounds. Frame queues stay bounded; unread frames can be replaced when the viewer falls behind. Core features for capture, input, compression and crypto are selected with Cargo feature flags.</p><p>The repository also contains relay, clipboard and file-transfer core modules. They are not a claim of deployed cloud infrastructure or complete desktop UI workflows.</p></section>
-      <section id="validation" data-doc-section><h2>Validation and current status</h2><p>The 28 October 2026 local validation recorded <strong>49 passing tests</strong> across the core, Tauri bridge and frontend, with <strong>one permission-dependent capture test ignored</strong>. These counts are a dated local result, not a live CI badge.</p><div class="docs-table-wrap"><table class="docs-table"><thead><tr><th>Area</th><th>Result</th><th>Boundary</th></tr></thead><tbody><tr><td>Core + public API tests</td><td class="result-pass">38 passed</td><td>37 library + 1 integration; 1 capture test ignored</td></tr><tr><td>Tauri bridge tests</td><td class="result-pass">5 passed</td><td>Bounds, isolation, cleanup and lifecycle guard</td></tr><tr><td>Frontend regressions</td><td class="result-pass">6 passed</td><td>Frames, coordinates, keys, wheel, endpoints and IPC policy</td></tr><tr><td>Actual macOS screen viewer</td><td class="result-pass">Observed</td><td>2880×1800 frames, up to 10 FPS in a same-Mac session</td></tr><tr><td>Host approve/revoke workflow</td><td class="result-pass">Observed</td><td>Input backend initialized; no actual input injected</td></tr><tr><td>Actual input and multi-monitor</td><td class="result-pending">Not tested</td><td>Controlled OS actions and second display required</td></tr><tr><td>Fullscreen</td><td class="result-pending">Blocked</td><td>Automation could not activate the document reliably</td></tr><tr><td>Public distribution</td><td class="result-pending">Incomplete</td><td>Developer ID, notarization, clean-machine installation</td></tr></tbody></table></div><p>Mock desktop backends in automated tests are distinguished from actual OS capture. Native CPU samples exclude WebKit helpers. Background viewer FPS varies, and no end-to-end latency measurement is claimed.</p><h3>Run the checks yourself</h3><div class="code-block"><div class="code-header"><span>Terminal · from application repository root</span><button type="button" class="copy-button" data-copy="code-checks" aria-label="Copy application validation commands">Copy</button></div><pre><code id="code-checks">cargo fmt --check
+npm run tauri:dev</code></pre>
+          </div>
+          <h3>Create an optimized app and DMG</h3>
+          <div class="code-block">
+            <div class="code-header">
+              <span>Terminal · from easycontrol/desktop</span
+              ><button
+                type="button"
+                class="copy-button"
+                data-copy="code-build"
+                aria-label="Copy macOS build command"
+              >
+                Copy
+              </button>
+            </div>
+            <pre><code id="code-build">npm run tauri:build</code></pre>
+          </div>
+          <p>
+            Artifacts are written under
+            <code>desktop/src-tauri/target/release/bundle/</code>. The app is in
+            <code>macos/</code> and the disk image in <code>dmg/</code>.
+            Architecture-specific filenames depend on the build target.
+          </p>
+          <div class="callout">
+            <p>
+              <strong>Local signing is different from distribution.</strong>
+              Ad-hoc builds can need fresh macOS grants after replacement. Use
+              the same Apple Development signing identity through
+              <code>APPLE_SIGNING_IDENTITY</code> for repeat local testing.
+              Public distribution still needs Developer ID signing, notarization
+              and installation testing on a clean Mac. Keep signing credentials
+              out of source control.
+            </p>
+          </div>
+          <h3>Isolated same-Mac QA client</h3>
+          <p>
+            The QA profile has a separate application name, bundle identifier
+            and storage namespace. It reuses the same Rust core and frontend.
+          </p>
+          <div class="code-block">
+            <div class="code-header">
+              <span>Terminal · from easycontrol/desktop</span
+              ><button
+                type="button"
+                class="copy-button"
+                data-copy="code-qa"
+                aria-label="Copy isolated QA build command"
+              >
+                Copy
+              </button>
+            </div>
+            <pre><code id="code-qa">npm run tauri:build -- --bundles app \
+  --config src-tauri/tauri.qa.conf.json</code></pre>
+          </div>
+          <p>
+            Do not distribute the QA app as a production artifact. Keep input
+            disabled during recursive same-Mac capture unless a controlled
+            target and explicit host approval are in place.
+          </p>
+        </section>
+        <section id="permissions" data-doc-section>
+          <h2>macOS permissions</h2>
+          <p>
+            Open <strong>System Settings → Privacy &amp; Security</strong> and
+            grant access to the exact installed host app. EasyControl uses
+            supported OS APIs and never bypasses these controls.
+          </p>
+          <div class="docs-table-wrap">
+            <table class="docs-table">
+              <thead>
+                <tr>
+                  <th>Permission</th>
+                  <th>When needed</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Screen Recording</td>
+                  <td>
+                    On the host, before actual screen capture. Quit and reopen
+                    the app after granting it.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Accessibility</td>
+                  <td>
+                    On the host, before approved mouse or keyboard injection.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Input Monitoring</td>
+                  <td>
+                    Not required by the current backend; EasyControl does not
+                    observe global keystrokes.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            The desktop Settings page reports these grants. A QA client that
+            only views frames does not need host capture/input permissions. If
+            the QA app hosts, its grants are separate.
+          </p>
+          <p>
+            A listening socket is not proof that screen capture is authorized.
+            Check actual sharing status and rendered application content.
+            Wallpaper-only frames from stale grants are not a successful capture
+            test.
+          </p>
+        </section>
+        <section id="first-session" data-doc-section>
+          <h2>Your first direct session</h2>
+          <ol>
+            <li>
+              <strong>Start on the host.</strong> Open Home → Share this
+              computer. Use port <code>5899</code> unless you need another port
+              in <code>1024–65535</code>.
+            </li>
+            <li>
+              <strong>Share credentials carefully.</strong> Start the host, copy
+              its displayed LAN endpoint and share the session password with the
+              intended person through a trusted channel.
+            </li>
+            <li>
+              <strong>Connect on the client.</strong> Enter the host’s numeric
+              IP address and port, then its password. The interface keeps
+              passwords out of saved devices and history.
+            </li>
+            <li>
+              <strong>Check the screen.</strong> The authenticated connection
+              begins view-only. Screen Recording must be granted on the host for
+              real frames.
+            </li>
+            <li>
+              <strong>Approve only when appropriate.</strong> The host’s Approve
+              control action enables its input backend. The client must also
+              enable sending input. The host can revoke it at any time.
+            </li>
+            <li>
+              <strong>End the session.</strong> Disconnect from either side. The
+              host returns to stopped after the session ends; start it again for
+              a new session.
+            </li>
+          </ol>
+          <p>
+            For an isolated same-Mac QA client, use <code>127.0.0.1:5899</code>.
+            That loopback address does not connect to a different computer.
+            Between machines, use the host’s real LAN endpoint and a reachable
+            network path.
+          </p>
+          <p>
+            No cloud device-ID service, discovery or automatic NAT traversal is
+            provided. Avoid exposing a development host directly to the
+            internet.
+          </p>
+        </section>
+        <section id="security" data-doc-section>
+          <h2>Security model</h2>
+          <p>
+            Authentication and encryption run in Rust. The frontend controls the
+            session API and does not implement a parallel networking stack.
+          </p>
+          <ul>
+            <li>
+              <strong>Authentication:</strong> SPAKE2 with encrypted key
+              confirmation.
+            </li>
+            <li>
+              <strong>Session encryption:</strong> ChaCha20-Poly1305 with
+              directional key material derived through HKDF-SHA256.
+            </li>
+            <li>
+              <strong>Protocol:</strong> version 5, with bounded
+              message/decompression handling.
+            </li>
+            <li>
+              <strong>Host authority:</strong> desktop input starts denied;
+              approval and revocation are enforced by the host.
+            </li>
+            <li>
+              <strong>Frame isolation:</strong> bounded latest-frame delivery is
+              scoped to the active authenticated session.
+            </li>
+            <li>
+              <strong>Local storage:</strong> saved addresses, devices, history
+              and appearance; no persisted session passwords.
+            </li>
+            <li>
+              <strong>No public frame endpoint:</strong> native binary IPC
+              connects Rust to the viewer.
+            </li>
+          </ul>
+          <div class="callout">
+            <p>
+              <strong>Encryption is not a completed security audit.</strong>
+              Independent review, real input denial tests and distribution
+              validation remain release requirements. Unattended or high-risk
+              deployment is not recommended at this stage.
+            </p>
+          </div>
+          <p>
+            Report a sensitive issue privately to the maintainer through
+            <a href="https://github.com/udhaybhat00">GitHub</a> before
+            publishing exploit details. Do not attach session credentials,
+            clipboard contents or private captured screens.
+          </p>
+        </section>
+        <section id="architecture" data-doc-section>
+          <h2>One engine. A thin desktop shell.</h2>
+          <div
+            class="architecture"
+            aria-label="Architecture: React and TypeScript UI, Tauri commands and binary frame IPC, Rust sessions and protocol, and OS backends"
+          >
+            <div>React + TypeScript · dashboard and viewer</div>
+            <span aria-hidden="true">↕</span>
+            <div>Tauri commands / events · bounded binary frame IPC</div>
+            <span aria-hidden="true">↕</span>
+            <div>Rust · SessionManager / SessionHandle / protocol v5</div>
+            <span aria-hidden="true">↕</span>
+            <div>OS capture + input · authenticated TCP transport</div>
+          </div>
+          <p>
+            The viewer decodes actual RGBA frames and maps input into monitor
+            coordinate bounds. Frame queues stay bounded; unread frames can be
+            replaced when the viewer falls behind. Core features for capture,
+            input, compression and crypto are selected with Cargo feature flags.
+          </p>
+          <p>
+            The repository also contains relay, clipboard and file-transfer core
+            modules. They are not a claim of deployed cloud infrastructure or
+            complete desktop UI workflows.
+          </p>
+        </section>
+        <section id="validation" data-doc-section>
+          <h2>Validation and current status</h2>
+          <p>
+            The 28 October 2026 local validation recorded
+            <strong>49 passing tests</strong> across the core, Tauri bridge and
+            frontend, with
+            <strong>one permission-dependent capture test ignored</strong>.
+            These counts are a dated local result, not a live CI badge.
+          </p>
+          <div class="docs-table-wrap">
+            <table class="docs-table">
+              <thead>
+                <tr>
+                  <th>Area</th>
+                  <th>Result</th>
+                  <th>Boundary</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Core + public API tests</td>
+                  <td class="result-pass">38 passed</td>
+                  <td>37 library + 1 integration; 1 capture test ignored</td>
+                </tr>
+                <tr>
+                  <td>Tauri bridge tests</td>
+                  <td class="result-pass">5 passed</td>
+                  <td>Bounds, isolation, cleanup and lifecycle guard</td>
+                </tr>
+                <tr>
+                  <td>Frontend regressions</td>
+                  <td class="result-pass">6 passed</td>
+                  <td>
+                    Frames, coordinates, keys, wheel, endpoints and IPC policy
+                  </td>
+                </tr>
+                <tr>
+                  <td>Actual macOS screen viewer</td>
+                  <td class="result-pass">Observed</td>
+                  <td>2880×1800 frames, up to 10 FPS in a same-Mac session</td>
+                </tr>
+                <tr>
+                  <td>Host approve/revoke workflow</td>
+                  <td class="result-pass">Observed</td>
+                  <td>Input backend initialized; no actual input injected</td>
+                </tr>
+                <tr>
+                  <td>Actual input and multi-monitor</td>
+                  <td class="result-pending">Not tested</td>
+                  <td>Controlled OS actions and second display required</td>
+                </tr>
+                <tr>
+                  <td>Fullscreen</td>
+                  <td class="result-pending">Blocked</td>
+                  <td>Automation could not activate the document reliably</td>
+                </tr>
+                <tr>
+                  <td>Public distribution</td>
+                  <td class="result-pending">Incomplete</td>
+                  <td>
+                    Developer ID, notarization, clean-machine installation
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            Mock desktop backends in automated tests are distinguished from
+            actual OS capture. Native CPU samples exclude WebKit helpers.
+            Background viewer FPS varies, and no end-to-end latency measurement
+            is claimed.
+          </p>
+          <h3>Run the checks yourself</h3>
+          <div class="code-block">
+            <div class="code-header">
+              <span>Terminal · from application repository root</span
+              ><button
+                type="button"
+                class="copy-button"
+                data-copy="code-checks"
+                aria-label="Copy application validation commands"
+              >
+                Copy
+              </button>
+            </div>
+            <pre><code id="code-checks">cargo fmt --check
 cargo check --all-features
 cargo test --all-features
 cargo clippy --all-features -- -D warnings
@@ -33,11 +496,118 @@ cargo test --manifest-path desktop/src-tauri/Cargo.toml
 cargo clippy --manifest-path desktop/src-tauri/Cargo.toml -- -D warnings
 cd desktop
 npm test
-npm run build</code></pre></div></section>
-      <section id="troubleshooting" data-doc-section><h2>Troubleshooting</h2><details><summary>Host cannot bind the listening port<span>+</span></summary><p>Stop any stale EasyControl host and check whether another service owns port 5899. Use a different available port in 1024–65535 if necessary. Do not terminate unrelated processes. Port 5900 is conventionally used by VNC/macOS Screen Sharing.</p></details><details><summary>Connection refused, timeout or wrong password<span>+</span></summary><p>Confirm the host is listening, the IP and port match the displayed endpoint, and both machines have a reachable network path. A handshake MAC mismatch can indicate the wrong password. A rejected password should leave the host available for a correct retry.</p></details><details><summary>Authenticated, but no frames or only wallpaper<span>+</span></summary><p>Check the exact installed host’s Screen Recording grant. Replaced/ad-hoc-signed copies can have stale permission entries. Quit and reopen after granting access. Never count wallpaper-only output as a successful desktop capture.</p></details><details><summary>Screen visible, but input does nothing<span>+</span></summary><p>Confirm Accessibility is granted to the host, the host explicitly approved control, and the client enabled Send input. Focus the viewer canvas. A client checkbox alone cannot grant host permissions. Real input testing remains a release gate.</p></details><details><summary>The source link returns 404<span>+</span></summary><p>The application repository is private at present. Sign in with an account that has access, or contact the maintainer. The public website repository contains no application source or signing credentials.</p></details></section>
-      <section id="contributing" data-doc-section><h2>Help test what’s next.</h2><p>Useful contributions include reproducible bug reports, two-machine macOS test results, accessibility findings and focused fixes with regression tests. Preserve the working Rust engine and protocol behavior.</p><p>Include the app revision, OS version, steps to reproduce and expected versus observed behavior. Remove passwords, keys, personal addresses, private screenshots and clipboard content before sharing logs.</p><p>Maintained by <a href="https://github.com/udhaybhat00">Udhay Bhat</a> · <a href="https://in.linkedin.com/in/udhaybhat">LinkedIn</a>. The project and website are MIT-licensed.</p><div class="setting-row"><label for="site-appearance">Website appearance</label> <select id="site-appearance" class="docs-search" data-theme-select aria-label="Website appearance"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></div></section>
-      <div class="docs-bottom-nav"><a class="text-link" href="./">← Back to EasyControl</a><a class="text-link" href="https://github.com/udhaybhat00/easycontrol-website">View website source ↗</a></div>
-    </div>
-  </main>
-  <footer class="site-footer wrap"><div class="footer-bottom"><span>© 2026 Udhay Bhat · MIT licensed</span><nav aria-label="Footer"><a href="./">Home</a><a href="https://github.com/udhaybhat00">GitHub</a><a href="https://in.linkedin.com/in/udhaybhat">LinkedIn</a></nav><span>No analytics. No tracking.</span></div></footer><div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-</body></html>
+npm run build</code></pre>
+          </div>
+        </section>
+        <section id="troubleshooting" data-doc-section>
+          <h2>Troubleshooting</h2>
+          <details>
+            <summary>Host cannot bind the listening port<span>+</span></summary>
+            <p>
+              Stop any stale EasyControl host and check whether another service
+              owns port 5899. Use a different available port in 1024–65535 if
+              necessary. Do not terminate unrelated processes. Port 5900 is
+              conventionally used by VNC/macOS Screen Sharing.
+            </p>
+          </details>
+          <details>
+            <summary>
+              Connection refused, timeout or wrong password<span>+</span>
+            </summary>
+            <p>
+              Confirm the host is listening, the IP and port match the displayed
+              endpoint, and both machines have a reachable network path. A
+              handshake MAC mismatch can indicate the wrong password. A rejected
+              password should leave the host available for a correct retry.
+            </p>
+          </details>
+          <details>
+            <summary>
+              Authenticated, but no frames or only wallpaper<span>+</span>
+            </summary>
+            <p>
+              Check the exact installed host’s Screen Recording grant.
+              Replaced/ad-hoc-signed copies can have stale permission entries.
+              Quit and reopen after granting access. Never count wallpaper-only
+              output as a successful desktop capture.
+            </p>
+          </details>
+          <details>
+            <summary>
+              Screen visible, but input does nothing<span>+</span>
+            </summary>
+            <p>
+              Confirm Accessibility is granted to the host, the host explicitly
+              approved control, and the client enabled Send input. Focus the
+              viewer canvas. A client checkbox alone cannot grant host
+              permissions. Real input testing remains a release gate.
+            </p>
+          </details>
+          <details>
+            <summary>The source link returns 404<span>+</span></summary>
+            <p>
+              The application repository is private at present. Sign in with an
+              account that has access, or contact the maintainer. The public
+              website repository contains no application source or signing
+              credentials.
+            </p>
+          </details>
+        </section>
+        <section id="contributing" data-doc-section>
+          <h2>Help test what’s next.</h2>
+          <p>
+            Useful contributions include reproducible bug reports, two-machine
+            macOS test results, accessibility findings and focused fixes with
+            regression tests. Preserve the working Rust engine and protocol
+            behavior.
+          </p>
+          <p>
+            Include the app revision, OS version, steps to reproduce and
+            expected versus observed behavior. Remove passwords, keys, personal
+            addresses, private screenshots and clipboard content before sharing
+            logs.
+          </p>
+          <p>
+            Maintained by
+            <a href="https://github.com/udhaybhat00">Udhay Bhat</a> ·
+            <a href="https://in.linkedin.com/in/udhaybhat">LinkedIn</a>. The
+            project and website are MIT-licensed.
+          </p>
+          <div class="setting-row">
+            <label for="site-appearance">Website appearance</label>
+            <select
+              id="site-appearance"
+              class="docs-search"
+              data-theme-select
+              aria-label="Website appearance"
+            >
+              <option value="system">System</option>
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+          </div>
+        </section>
+        <div class="docs-bottom-nav">
+          <a class="text-link" href="./">← Back to EasyControl</a
+          ><a
+            class="text-link"
+            href="https://github.com/udhaybhat00/easycontrol-website"
+            >View website source ↗</a
+          >
+        </div>
+      </div>
+    </main>
+    <footer class="site-footer wrap">
+      <div class="footer-bottom">
+        <span>© 2026 Udhay Bhat · MIT licensed</span>
+        <nav aria-label="Footer">
+          <a href="./">Home</a
+          ><a href="https://github.com/udhaybhat00">GitHub</a
+          ><a href="https://in.linkedin.com/in/udhaybhat">LinkedIn</a>
+        </nav>
+        <span>No analytics. No tracking.</span>
+      </div>
+    </footer>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>
