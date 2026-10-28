@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "Free, fast remote desktop tool in Rust"
 authors = ["easycontrol"]
+license = "MIT"
+repository = "https://github.com/udhaybhat00/easycontrol"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

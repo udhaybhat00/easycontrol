@@ -10,7 +10,7 @@ EasyControl is an open-source, direct remote-desktop application built with Rust
 - Password-authenticated sessions using SPAKE2 with encrypted key confirmation
 - Protocol v5 with encrypted session traffic
 - Screen capture, frame delivery, and remote input backends behind Rust feature flags
-- Host-controlled permissions for remote input, clipboard, file transfer, and chat
+- Host-controlled permissions for remote input, clipboard, file transfer, and chat; desktop hosts start view-only and approve input during an authenticated session
 - A Tauri desktop application with light, dark, and system appearance modes
 - Local recent-connection and saved-device lists; passwords are never persisted by the desktop UI
 - A separate **EasyControl QA** app identity for same-Mac host/client testing without overwriting production desktop preferences
@@ -83,11 +83,16 @@ cd desktop
 npm run tauri:build
 ```
 
-The debug bundle is written to:
+The release bundles are written to:
 
 ```text
-desktop/src-tauri/target/debug/bundle/macos/EasyControl.app
+desktop/src-tauri/target/release/bundle/macos/EasyControl.app
+desktop/src-tauri/target/release/bundle/dmg/EasyControl_0.1.0_aarch64.dmg
 ```
+
+For a debug app, run `npm run tauri:build -- --debug --bundles app`; its bundle is under `target/debug/bundle/macos/` instead. The filename architecture depends on the build target.
+
+Local macOS builds default to an ad-hoc bundle signature. For repeated testing with Screen Recording and Accessibility grants, use the same Apple Development identity through `APPLE_SIGNING_IDENTITY` on every build; replacing an ad-hoc build can invalidate its grants. The installed QA-tested host uses a stable development signature. An Apple Development signature is not a public distribution signature. For distribution, supply a Developer ID Application identity and configure notarization credentials through the environment. Never commit certificates, private keys, or signing passwords. See [Tauri's macOS signing guide](https://v2.tauri.app/distribute/sign/macos/).
 
 ## Direct connection workflow
 
@@ -95,7 +100,7 @@ desktop/src-tauri/target/debug/bundle/macos/EasyControl.app
 2. Choose a listening port. EasyControl defaults to `5899` to avoid the conventional VNC/Screen Sharing port `5900`.
 3. Start the host and share the displayed LAN address and session password through a trusted channel.
 4. On the client, enter `host:port` and the session password, then choose **Connect**.
-5. The host controls privileged permissions. A client cannot grant itself remote input.
+5. Sharing starts view-only. The host can choose **Approve control** after authentication and **Revoke control** at any time. A client cannot grant itself remote input.
 
 This project currently has no cloud relay, public device identity, or discovery service. Direct connectivity depends on the network path between host and client.
 
@@ -109,6 +114,9 @@ This project currently has no cloud relay, public device identity, or discovery 
 | Strict linting | `cargo clippy --all-features -- -D warnings` |
 | Release core build | `cargo build --release --all-features` |
 | Frontend build | `cd desktop && npm run build` |
+| Frontend regression tests | `cd desktop && npm test` |
+| Tauri bridge tests | `cargo test --manifest-path desktop/src-tauri/Cargo.toml` |
+| Tauri strict linting | `cargo clippy --manifest-path desktop/src-tauri/Cargo.toml -- -D warnings` |
 | Desktop development | `cd desktop && npm run tauri:dev` |
 | Desktop bundle | `cd desktop && npm run tauri:build` |
 
@@ -118,7 +126,7 @@ The QA configuration is development-only and uses a separate bundle identifier, 
 
 ```bash
 cd desktop
-VITE_EC_PROFILE=qa npm run tauri -- build --debug --config src-tauri/tauri.qa.conf.json
+npm run tauri:build -- --debug --bundles app --config src-tauri/tauri.qa.conf.json
 ```
 
 Do not distribute the QA build as a production artifact.
@@ -137,12 +145,14 @@ Security features require ongoing review. They should not be interpreted as a gu
 
 ## Current limitations
 
-- Real two-machine / two-instance macOS validation of capture, viewer rendering, input approval, revocation, reconnect behavior, and cleanup is still in progress.
-- Performance telemetry for real sessions (FPS, dropped frames, CPU, memory, and throughput) has not been baselined.
+- Real same-Mac production-host / QA-client authentication, screen rendering, host approval/revocation, reconnect and socket cleanup have been observed. Actual mouse/keyboard injection and two-machine testing remain outstanding.
+- Initial real-session measurements are in the QA report. Background/occluded viewer FPS varies; total application CPU and end-to-end latency have not been measured.
 - No cloud relay, NAT traversal, global device IDs, or device discovery.
 - No complete desktop UI for clipboard, chat, or file transfer.
 - macOS is the only desktop packaging target built in this repository so far; Windows and Linux are not yet validated releases.
-- A DMG release workflow still needs end-to-end packaging validation.
+- Local app and DMG packaging is exercised on macOS. Developer ID signing, notarization, and installation on a clean machine remain release gates.
+
+See the [latest QA report](docs/QA-2026-10-28.md) for observed results and remaining manual checks. Automated checks are defined in [the macOS validation workflow](.github/workflows/validate.yml); a workflow definition is not evidence that a hosted run has passed.
 
 ## Contributing
 
@@ -158,4 +168,4 @@ For a UI change, run `cd desktop && npm run build`. For core changes, run the Ru
 
 ## License
 
-No license file is currently included in this repository. Add an explicit license before publishing binaries or accepting third-party contributions under defined terms.
+EasyControl is available under the [MIT License](LICENSE). Copyright © 2026 Udhay Bhat.

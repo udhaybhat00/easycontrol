@@ -11,7 +11,7 @@ const special: Record<string, number> = {
   F7: 0x76, F8: 0x77, F9: 0x78, F10: 0x79, F11: 0x7a, F12: 0x7b,
 };
 
-export function remoteKeyCode(event: KeyboardEvent | React.KeyboardEvent<HTMLCanvasElement>): number | undefined {
+export function remoteKeyCode(event: { code: string; metaKey: boolean; altKey: boolean }): number | undefined {
   if (event.metaKey || (event.altKey && event.code === "Tab")) return undefined;
   if (special[event.code] !== undefined) return special[event.code];
   const match = /^(Key|Digit)([A-Z0-9])$/.exec(event.code);

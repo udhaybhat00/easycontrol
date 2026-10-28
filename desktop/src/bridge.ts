@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 export type Permissions = { input: boolean; clipboard: boolean; fileTransfer: boolean; chat: boolean };
-export type Status = { state: string; detail: string; sessionId?: string };
+export type Status = { state: string; detail: string; sessionId?: string; host?: boolean };
 export type DesktopPermissions = { platform: string; screenRecording: string; accessibility: string; inputMonitoring: string };
 export type HostSessionStatus = { active: boolean; screenSharing: boolean; remoteInput: boolean; clipboard: boolean; fileTransfer: boolean; peer?: string };
 export type CoreEvent = { kind: string; detail?: string; sessionId?: string };
@@ -19,8 +19,10 @@ export function decodeFramePacket(raw: Uint8Array): FramePacket | undefined {
   const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
   const sequence = Number(view.getBigUint64(4, true));
   const width = view.getUint32(12, true), height = view.getUint32(16, true), stride = view.getUint32(20, true), dropped = Number(view.getBigUint64(24, true));
-  if (!width || !height || stride < width * 4 || raw.byteLength !== 32 + stride * height) return undefined;
-  return { sequence, width, height, stride, dropped, pixels: new Uint8ClampedArray(raw.buffer.slice(raw.byteOffset + 32)) };
+  if (!Number.isSafeInteger(sequence) || !width || !height || stride < width * 4 || stride * height > 64 * 1024 * 1024 || raw.byteLength !== 32 + stride * height) return undefined;
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  for (let row = 0; row < height; row++) pixels.set(raw.subarray(32 + row * stride, 32 + row * stride + width * 4), row * width * 4);
+  return { sequence, width, height, stride, dropped, pixels };
 }
 
 export const core = {
@@ -33,11 +35,11 @@ export const core = {
   desktopPermissions: () => invoke<DesktopPermissions>("desktop_permissions"),
   requestScreenRecording: () => invoke<boolean>("request_screen_recording_permission"),
   openPrivacySettings: (kind: "screen" | "accessibility") => invoke<void>("open_privacy_settings", { kind }),
-  openCreatorProfile: (profile: "github" | "linkedin") => invoke<void>("open_creator_profile", { profile }),
+  openCreatorProfile: (profile: "github" | "linkedin" | "source" | "issues") => invoke<void>("open_creator_profile", { profile }),
   hostSessionStatus: () => invoke<HostSessionStatus>("host_session_status"),
   monitors: () => invoke<RemoteMonitor[]>("available_monitors"),
-  selectMonitor: (index: number) => invoke<void>("select_remote_monitor", { index }),
-  latestFrame: (afterSequence: number) => invoke<Uint8Array>("latest_frame", { afterSequence }),
-  viewerInput: (input: ViewerInput) => invoke<void>("viewer_input", { input }),
+  selectMonitor: (sessionId: string, index: number) => invoke<void>("select_remote_monitor", { sessionId, index }),
+  latestFrame: (sessionId: string, afterSequence: number) => invoke<Uint8Array>("latest_frame", { sessionId, afterSequence }),
+  viewerInput: (sessionId: string, input: ViewerInput) => invoke<void>("viewer_input", { sessionId, input }),
   events: (handler: (event: CoreEvent) => void) => listen<CoreEvent>("session-event", event => handler(event.payload))
 };

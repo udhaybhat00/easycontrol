@@ -35,9 +35,11 @@ struct Status {
     state: String,
     detail: String,
     session_id: Option<String>,
+    host: bool,
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct FrontendEvent {
     kind: String,
     detail: Option<String>,
@@ -59,6 +61,7 @@ struct FrameStore {
     latest: Option<LatestFrame>,
     next_sequence: u64,
     dropped: u64,
+    delivered_sequence: u64,
 }
 
 #[derive(Serialize)]
@@ -83,6 +86,7 @@ enum ViewerInput {
 }
 
 struct AppState {
+    operation: Mutex<()>,
     session: Mutex<Option<SessionHandle>>,
     host_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     permissions: RwLock<Permissions>,
@@ -90,11 +94,13 @@ struct AppState {
     frames: RwLock<FrameStore>,
     monitors: RwLock<Vec<CoreMonitorInfo>>,
     host: RwLock<bool>,
+    sharing: RwLock<bool>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self {
+            operation: Mutex::new(()),
             session: Mutex::new(None),
             host_task: Mutex::new(None),
             permissions: RwLock::new(Permissions {
@@ -107,10 +113,12 @@ impl Default for AppState {
                 state: "idle".into(),
                 detail: "Ready for a direct connection".into(),
                 session_id: None,
+                host: false,
             }),
             frames: RwLock::new(FrameStore::default()),
             monitors: RwLock::new(Vec::new()),
             host: RwLock::new(false),
+            sharing: RwLock::new(false),
         }
     }
 }
@@ -131,6 +139,7 @@ async fn set_status(state: &AppState, next: Status) {
 }
 
 async fn clear_viewer_state(state: &AppState) {
+    *state.sharing.write().await = false;
     *state.frames.write().await = FrameStore::default();
     state.monitors.write().await.clear();
 }
@@ -147,11 +156,35 @@ async fn store_frame(
         .checked_mul(height)
         .map(usize::try_from)
         .and_then(Result::ok);
-    if format != "RGBA8" || stride < width.saturating_mul(4) || expected != Some(data.len()) {
+    if width == 0
+        || height == 0
+        || data.len() > 64 * 1024 * 1024
+        || format != "RGBA8"
+        || stride < width.saturating_mul(4)
+        || expected != Some(data.len())
+    {
+        tracing::warn!(
+            width,
+            height,
+            stride,
+            bytes = data.len(),
+            "Rejected invalid screen frame metadata"
+        );
         return;
     }
+    tracing::debug!(
+        width,
+        height,
+        stride,
+        bytes = data.len(),
+        "Accepted screen frame"
+    );
     let mut frames = state.frames.write().await;
-    if frames.latest.is_some() {
+    if frames
+        .latest
+        .as_ref()
+        .is_some_and(|frame| frame.sequence > frames.delivered_sequence)
+    {
         frames.dropped = frames.dropped.saturating_add(1);
     }
     frames.next_sequence = frames.next_sequence.saturating_add(1);
@@ -181,8 +214,18 @@ fn encode_frame(frame: &LatestFrame, dropped: u64) -> Vec<u8> {
 fn forward_events(app: AppHandle, handle: SessionHandle) {
     tauri::async_runtime::spawn(async move {
         let mut events = handle.event_stream();
-        while let Ok(event) = events.recv().await {
+        loop {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             let state = app.state::<AppState>();
+            let _operation = state.operation.lock().await;
+            if state.status.read().await.session_id.as_deref() != Some(handle.id()) {
+                break;
+            }
+            let disconnected = matches!(event, SessionEvent::Disconnected { .. });
             let payload = match event {
                 SessionEvent::Connected { session_id } => FrontendEvent {
                     kind: "connected".into(),
@@ -199,6 +242,7 @@ fn forward_events(app: AppHandle, handle: SessionHandle) {
                             state: "idle".into(),
                             detail: reason.clone(),
                             session_id: None,
+                            host: false,
                         },
                     )
                     .await;
@@ -236,6 +280,10 @@ fn forward_events(app: AppHandle, handle: SessionHandle) {
                     store_frame(&state, width, height, stride, format, data).await;
                     continue;
                 }
+                SessionEvent::ScreenSharing { active } => {
+                    *state.sharing.write().await = active;
+                    continue;
+                }
                 SessionEvent::ClipboardData { .. }
                 | SessionEvent::ChatMessage { .. }
                 | SessionEvent::FileList { .. }
@@ -243,6 +291,9 @@ fn forward_events(app: AppHandle, handle: SessionHandle) {
                 | SessionEvent::FileWritten { .. } => continue,
             };
             let _ = app.emit("session-event", payload);
+            if disconnected {
+                break;
+            }
         }
     });
 }
@@ -252,7 +303,15 @@ async fn configure_permissions(
     state: State<'_, AppState>,
     permissions: Permissions,
 ) -> Result<(), String> {
+    let _operation = state.operation.lock().await;
     let previous = state.permissions.read().await.clone();
+    if (previous.clipboard != permissions.clipboard
+        || previous.file_transfer != permissions.file_transfer
+        || previous.chat != permissions.chat)
+        && state.status.read().await.state != "idle"
+    {
+        return Err("Stop the session before changing clipboard, file or chat permissions".into());
+    }
     if *state.host.read().await && previous.input != permissions.input {
         if let Some(handle) = state.session.lock().await.clone() {
             handle
@@ -283,6 +342,8 @@ fn open_privacy_settings(kind: String) -> Result<(), String> {
 #[tauri::command]
 fn open_creator_profile(profile: String) -> Result<(), String> {
     let url = match profile.as_str() {
+        "source" => "https://github.com/udhaybhat00/easycontrol",
+        "issues" => "https://github.com/udhaybhat00/easycontrol/issues",
         "github" => "https://github.com/udhaybhat00",
         "linkedin" => "https://in.linkedin.com/in/udhaybhat",
         _ => return Err("Unknown creator profile".into()),
@@ -312,7 +373,7 @@ async fn host_session_status(state: State<'_, AppState>) -> Result<HostSessionSt
     let active = host && state.session.lock().await.is_some();
     Ok(HostSessionStatus {
         active,
-        screen_sharing: active,
+        screen_sharing: active && *state.sharing.read().await,
         remote_input: host && permissions.input,
         clipboard: host && permissions.clipboard,
         file_transfer: host && permissions.file_transfer,
@@ -321,19 +382,36 @@ async fn host_session_status(state: State<'_, AppState>) -> Result<HostSessionSt
 }
 
 #[tauri::command]
-async fn latest_frame(state: State<'_, AppState>, after_sequence: u64) -> Result<Response, String> {
-    if state.status.read().await.state != "connected" {
-        return Ok(Response::new(Vec::<u8>::new()));
+async fn latest_frame(
+    state: State<'_, AppState>,
+    session_id: String,
+    after_sequence: u64,
+) -> Result<Response, String> {
+    Ok(Response::new(
+        frame_packet(&state, &session_id, after_sequence).await,
+    ))
+}
+
+async fn frame_packet(state: &AppState, session_id: &str, after_sequence: u64) -> Vec<u8> {
+    let _operation = state.operation.lock().await;
+    let status = state.status.read().await;
+    if status.state != "connected"
+        || status.host
+        || status.session_id.as_deref() != Some(session_id)
+    {
+        return Vec::new();
     }
-    let frames = state.frames.read().await;
+    let mut frames = state.frames.write().await;
     let Some(frame) = frames
         .latest
         .as_ref()
         .filter(|frame| frame.sequence > after_sequence)
     else {
-        return Ok(Response::new(Vec::<u8>::new()));
+        return Vec::new();
     };
-    Ok(Response::new(encode_frame(frame, frames.dropped)))
+    let body = encode_frame(frame, frames.dropped);
+    frames.delivered_sequence = frame.sequence;
+    body
 }
 
 #[tauri::command]
@@ -354,8 +432,17 @@ async fn frame_stats(state: State<'_, AppState>) -> Result<Option<FrameStats>, S
 }
 
 #[tauri::command]
-async fn viewer_input(state: State<'_, AppState>, input: ViewerInput) -> Result<(), String> {
-    if state.status.read().await.state != "connected" {
+async fn viewer_input(
+    state: State<'_, AppState>,
+    session_id: String,
+    input: ViewerInput,
+) -> Result<(), String> {
+    let _operation = state.operation.lock().await;
+    let status = state.status.read().await;
+    if status.state != "connected"
+        || status.host
+        || status.session_id.as_deref() != Some(&session_id)
+    {
         return Err("No authenticated session is active".into());
     }
     if !state.permissions.read().await.input {
@@ -375,6 +462,10 @@ async fn viewer_input(state: State<'_, AppState>, input: ViewerInput) -> Result<
         .await
         .clone()
         .ok_or("No active session")?;
+    // Enqueuing can wait under network backpressure. Keep disconnect and local
+    // permission changes available; this cloned handle cannot target a new session.
+    drop(status);
+    drop(_operation);
     handle
         .send_command(command)
         .await
@@ -382,7 +473,19 @@ async fn viewer_input(state: State<'_, AppState>, input: ViewerInput) -> Result<
 }
 
 #[tauri::command]
-async fn select_remote_monitor(state: State<'_, AppState>, index: usize) -> Result<(), String> {
+async fn select_remote_monitor(
+    state: State<'_, AppState>,
+    session_id: String,
+    index: usize,
+) -> Result<(), String> {
+    let _operation = state.operation.lock().await;
+    let status = state.status.read().await;
+    if status.state != "connected"
+        || status.host
+        || status.session_id.as_deref() != Some(&session_id)
+    {
+        return Err("No matching client session is active".into());
+    }
     if !state
         .monitors
         .read()
@@ -398,6 +501,8 @@ async fn select_remote_monitor(state: State<'_, AppState>, index: usize) -> Resu
         .await
         .clone()
         .ok_or("No active session")?;
+    drop(status);
+    drop(_operation);
     handle
         .send_command(SessionCommand::MonitorSelect { index })
         .await
@@ -417,6 +522,8 @@ async fn connect(
     password: String,
     permissions: Permissions,
 ) -> Result<(), String> {
+    let _operation = state.operation.lock().await;
+    ensure_idle(&state).await?;
     let address: SocketAddr = address
         .parse()
         .map_err(|_| "Use a direct host:port address".to_string())?;
@@ -424,6 +531,7 @@ async fn connect(
         return Err("A non-empty session password is required".into());
     }
     clear_viewer_state(&state).await;
+    *state.permissions.write().await = permissions.clone();
     *state.host.write().await = false;
     set_status(
         &state,
@@ -431,28 +539,79 @@ async fn connect(
             state: "connecting".into(),
             detail: "Authenticating connection".into(),
             session_id: None,
+            host: false,
         },
     )
     .await;
-    let handle = SessionManager::start_client(SessionConfig {
-        connect_addr: Some(address),
-        ..config(password, permissions)
-    })
-    .await
-    .map_err(|error| error.to_string())?;
-    let id = handle.id().to_string();
-    *state.session.lock().await = Some(handle.clone());
-    set_status(
-        &state,
-        Status {
-            state: "connected".into(),
-            detail: "Encrypted session active".into(),
-            session_id: Some(id),
-        },
-    )
-    .await;
-    forward_events(app, handle);
+    let app_clone = app.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        let result = SessionManager::start_client(SessionConfig {
+            connect_addr: Some(address),
+            ..config(password, permissions)
+        })
+        .await;
+        finish_connection(app_clone, result, false).await;
+    });
+    *state.host_task.lock().await = Some(task);
     Ok(())
+}
+
+async fn ensure_idle(state: &AppState) -> Result<(), String> {
+    if state.status.read().await.state != "idle"
+        || state.host_task.lock().await.is_some()
+        || state.session.lock().await.is_some()
+    {
+        return Err("Disconnect the current session before starting another".into());
+    }
+    Ok(())
+}
+
+async fn finish_connection(
+    app: AppHandle,
+    result: Result<SessionHandle, easycontrol::CoreError>,
+    host: bool,
+) {
+    let state = app.state::<AppState>();
+    let _operation = state.operation.lock().await;
+    state.host_task.lock().await.take();
+    match result {
+        Ok(handle) => {
+            let id = handle.id().to_string();
+            *state.session.lock().await = Some(handle.clone());
+            set_status(
+                &state,
+                Status {
+                    state: "connected".into(),
+                    detail: "Authenticated session active".into(),
+                    session_id: Some(id),
+                    host,
+                },
+            )
+            .await;
+            forward_events(app.clone(), handle);
+        }
+        Err(error) => {
+            *state.host.write().await = false;
+            set_status(
+                &state,
+                Status {
+                    state: "idle".into(),
+                    detail: error.to_string(),
+                    session_id: None,
+                    host: false,
+                },
+            )
+            .await;
+            let _ = app.emit(
+                "session-event",
+                FrontendEvent {
+                    kind: "error".into(),
+                    detail: Some(error.to_string()),
+                    session_id: None,
+                },
+            );
+        }
+    }
 }
 
 #[tauri::command]
@@ -463,13 +622,25 @@ async fn start_host(
     password: String,
     permissions: Permissions,
 ) -> Result<(), String> {
+    let _operation = state.operation.lock().await;
+    ensure_idle(&state).await?;
+    if port < 1024 {
+        return Err("Use a port from 1024 to 65535".into());
+    }
     if password.trim().is_empty() {
         return Err("A non-empty session password is required".into());
     }
-    if state.host_task.lock().await.is_some() {
-        return Err("A host is already starting or active".into());
-    }
+    // Each connection starts view-only. Input approval belongs to the host
+    // after authentication, even if a previous session permitted control.
+    let permissions = Permissions {
+        input: false,
+        ..permissions
+    };
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port))
+        .await
+        .map_err(|error| format!("Could not listen on port {port}: {error}"))?;
     clear_viewer_state(&state).await;
+    *state.permissions.write().await = permissions.clone();
     *state.host.write().await = true;
     set_status(
         &state,
@@ -477,59 +648,15 @@ async fn start_host(
             state: "hosting".into(),
             detail: format!("Waiting for a direct connection on port {port}"),
             session_id: None,
+            host: true,
         },
     )
     .await;
     let app_clone = app.clone();
     let task = tauri::async_runtime::spawn(async move {
-        let result = SessionManager::start_host(SessionConfig {
-            listen_addr: Some(([0, 0, 0, 0], port).into()),
-            ..config(password, permissions)
-        })
-        .await;
-        match result {
-            Ok(handle) => {
-                let id = handle.id().to_string();
-                let state_ref = app_clone.state::<AppState>();
-                // `start_host` returns after the accepted peer is authenticated. The
-                // listener task is therefore complete; leaving its JoinHandle in
-                // AppState would incorrectly prevent the next host session.
-                state_ref.host_task.lock().await.take();
-                *state_ref.session.lock().await = Some(handle.clone());
-                set_status(
-                    &state_ref,
-                    Status {
-                        state: "connected".into(),
-                        detail: "Encrypted session active".into(),
-                        session_id: Some(id),
-                    },
-                )
-                .await;
-                forward_events(app_clone, handle);
-            }
-            Err(error) => {
-                let state_ref = app_clone.state::<AppState>();
-                state_ref.host_task.lock().await.take();
-                *state_ref.host.write().await = false;
-                set_status(
-                    &state_ref,
-                    Status {
-                        state: "idle".into(),
-                        detail: error.to_string(),
-                        session_id: None,
-                    },
-                )
-                .await;
-                let _ = app_clone.emit(
-                    "session-event",
-                    FrontendEvent {
-                        kind: "error".into(),
-                        detail: Some(error.to_string()),
-                        session_id: None,
-                    },
-                );
-            }
-        }
+        let result =
+            SessionManager::start_host_listener(listener, config(password, permissions)).await;
+        finish_connection(app_clone, result, true).await;
     });
     *state.host_task.lock().await = Some(task);
     Ok(())
@@ -553,8 +680,10 @@ fn local_network_endpoint(port: u16) -> Result<String, String> {
 
 #[tauri::command]
 async fn disconnect(state: State<'_, AppState>) -> Result<(), String> {
+    let _operation = state.operation.lock().await;
     if let Some(task) = state.host_task.lock().await.take() {
         task.abort();
+        let _ = task.await;
     }
     if let Some(handle) = state.session.lock().await.take() {
         handle
@@ -568,6 +697,7 @@ async fn disconnect(state: State<'_, AppState>) -> Result<(), String> {
             state: "idle".into(),
             detail: "Disconnected".into(),
             session_id: None,
+            host: false,
         },
     )
     .await;
@@ -610,6 +740,16 @@ fn main() {
         .init();
     tauri::Builder::default()
         .manage(AppState::default())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let app = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = disconnect(app.state::<AppState>()).await;
+                    app.exit(0);
+                });
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             start_host,
             local_network_endpoint,
@@ -654,6 +794,43 @@ mod tests {
         let state = AppState::default();
         store_frame(&state, 2, 1, 4, "RGBA8".into(), vec![0; 4]).await;
         assert!(state.frames.read().await.latest.is_none());
+    }
+
+    #[tokio::test]
+    async fn frame_delivery_is_isolated_to_the_active_client_session() {
+        let state = AppState::default();
+        *state.status.write().await = Status {
+            state: "connected".into(),
+            detail: String::new(),
+            session_id: Some("active".into()),
+            host: false,
+        };
+        store_frame(&state, 1, 1, 4, "RGBA8".into(), vec![7; 4]).await;
+        assert!(frame_packet(&state, "previous", 0).await.is_empty());
+        assert_eq!(&frame_packet(&state, "active", 0).await[..4], b"ECF1");
+        assert!(frame_packet(&state, "active", 1).await.is_empty());
+        state.status.write().await.state = "idle".into();
+        assert!(frame_packet(&state, "active", 0).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delivered_frames_are_not_counted_as_dropped_and_cleanup_clears_pixels() {
+        let state = AppState::default();
+        store_frame(&state, 1, 1, 4, "RGBA8".into(), vec![1; 4]).await;
+        state.frames.write().await.delivered_sequence = 1;
+        store_frame(&state, 1, 1, 4, "RGBA8".into(), vec![2; 4]).await;
+        assert_eq!(state.frames.read().await.dropped, 0);
+        clear_viewer_state(&state).await;
+        assert!(state.frames.read().await.latest.is_none());
+        assert!(state.monitors.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn another_operation_is_rejected_while_connection_is_pending() {
+        let state = AppState::default();
+        assert!(ensure_idle(&state).await.is_ok());
+        state.status.write().await.state = "connecting".into();
+        assert!(ensure_idle(&state).await.is_err());
     }
 }
 mod permissions;

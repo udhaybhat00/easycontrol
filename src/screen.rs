@@ -93,13 +93,28 @@ impl ScreenCapture for XcapCapture {
                 y,
                 width,
                 height,
-                primary: i == 0,
+                primary: mon
+                    .is_primary()
+                    .map_err(|e| ScreenError::Capture(e.to_string()))?,
             });
         }
         Ok(out)
     }
 
     fn capture(&mut self, monitor: usize) -> Result<Vec<u8>, ScreenError> {
+        // CoreGraphics may return wallpaper while hiding other applications
+        // when permission is missing. Never present that partial image as a
+        // working remote desktop.
+        #[cfg(target_os = "macos")]
+        {
+            #[link(name = "CoreGraphics", kind = "framework")]
+            extern "C" {
+                fn CGPreflightScreenCaptureAccess() -> bool;
+            }
+            if !unsafe { CGPreflightScreenCaptureAccess() } {
+                return Err(ScreenError::Capture("Screen Recording permission is required. Enable EasyControl in System Settings and restart it.".into()));
+            }
+        }
         let monitors = XcapMonitor::all().map_err(|e| ScreenError::Capture(e.to_string()))?;
         if monitor >= monitors.len() {
             return Err(ScreenError::MonitorNotFound(monitor));
@@ -125,9 +140,13 @@ impl ScreenCapture for XcapCapture {
         // xcap reports display bounds in macOS points while capture_image()
         // returns physical Retina pixels. Frame metadata must describe the
         // byte buffer, otherwise receivers correctly reject the frame.
+        #[cfg(target_os = "macos")]
         let scale = mon
             .scale_factor()
             .map_err(|e| ScreenError::Capture(e.to_string()))?;
+        // Other xcap backends already report physical pixel dimensions.
+        #[cfg(not(target_os = "macos"))]
+        let scale = 1.0;
         Ok((
             (width as f32 * scale).round() as u32,
             (height as f32 * scale).round() as u32,

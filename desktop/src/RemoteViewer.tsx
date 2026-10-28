@@ -1,61 +1,184 @@
-import { useEffect, useRef, useState } from "react";
-import { Maximize2, Monitor, MousePointer2, Power, ScanLine } from "lucide-react";
-import { core, decodeFramePacket, RemoteMonitor } from "./bridge";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Maximize2, Monitor, Power, ScanLine } from "lucide-react";
+import { core, decodeFramePacket, type RemoteMonitor, type ViewerInput } from "./bridge";
 import { remoteKeyCode } from "./keymap";
+import { mapCoordinates, mouseButton, scrollSteps } from "./viewer-utils";
 
-export function RemoteViewer({ inputAllowed, onDisconnect, onError }: { inputAllowed: boolean; onDisconnect: () => void; onError: (message: string) => void }) {
+export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDisconnect, onError }: {
+  sessionId: string; inputAllowed: boolean; onInputAllowed: (enabled: boolean) => void;
+  onDisconnect: () => void; onError: (message: string) => void;
+}) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const lastSequence = useRef(0);
+  const panel = useRef<HTMLElement>(null);
   const pendingMove = useRef<{ x: number; y: number }>();
   const raf = useRef<number>();
-  const heldKeys = useRef(new Set<number>());
+  const moveBusy = useRef(false);
+  const wheelBusy = useRef(false);
+  const pendingWheel = useRef({ dx: 0, dy: 0 });
+  const heldKeys = useRef(new Map<string, number>());
+  const heldButtons = useRef(new Map<number, { x: number; y: number }>());
+  const allowed = useRef(inputAllowed);
+  allowed.current = inputAllowed;
+  const errors = useRef(onError);
+  errors.current = onError;
   const [monitors, setMonitors] = useState<RemoteMonitor[]>([]);
   const [selected, setSelected] = useState<RemoteMonitor>();
-  const [stats, setStats] = useState({ fps: 0, dropped: 0, width: 0, height: 0 });
+  const [switching, setSwitching] = useState(false);
+  const [stats, setStats] = useState({ fps: 0, dropped: 0, width: 0, height: 0, bytesPerSecond: 0 });
   const [originalSize, setOriginalSize] = useState(false);
   const [focused, setFocused] = useState(false);
 
+  const send = useCallback((input: ViewerInput) => core.viewerInput(sessionId, input).catch(error => errors.current(String(error))), [sessionId]);
+  const release = useCallback(() => {
+    pendingMove.current = undefined;
+    pendingWheel.current = { dx: 0, dy: 0 };
+    if (raf.current) cancelAnimationFrame(raf.current);
+    raf.current = undefined;
+    for (const code of heldKeys.current.values()) void send({ kind: "keyUp", code });
+    heldKeys.current.clear();
+    for (const [button, point] of heldButtons.current) void send({ kind: "mouseUp", button, ...point });
+    heldButtons.current.clear();
+  }, [send]);
+
   useEffect(() => {
-    let live = true, frames = 0, started = performance.now();
-    const refreshMonitors = () => core.monitors().then(items => { if (live) { setMonitors(items); setSelected(current => current && items.some(item => item.index === current.index) ? current : items[0]); } }).catch(error => onError(String(error)));
-    refreshMonitors();
-    const monitorTimer = window.setInterval(refreshMonitors, 1000);
-    const timer = window.setInterval(async () => {
+    let live = true, sequence = 0, frames = 0, bytes = 0, started = performance.now();
+    let timer: number | undefined;
+    const refreshMonitors = async () => {
       try {
-        const raw = await core.latestFrame(lastSequence.current);
-        const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw as unknown as ArrayBuffer);
-        const frame = decodeFramePacket(bytes);
-        if (!live || !frame) return;
-        lastSequence.current = frame.sequence;
-        const target = canvas.current;
-        const context = target?.getContext("2d", { alpha: false });
-        if (!target || !context) return;
-        target.width = frame.width;
-        target.height = frame.height;
-        const pixels = new Uint8ClampedArray(frame.pixels.length);
-        pixels.set(frame.pixels);
-        context.putImageData(new ImageData(pixels, frame.width, frame.height), 0, 0);
-        frames += 1;
-        const elapsed = performance.now() - started;
-        if (elapsed >= 1000) { setStats({ fps: Math.round(frames * 1000 / elapsed), dropped: frame.dropped, width: frame.width, height: frame.height }); frames = 0; started = performance.now(); }
-      } catch (error) { if (live) onError(String(error)); }
-    }, 50);
-    return () => { live = false; window.clearInterval(timer); window.clearInterval(monitorTimer); };
-  }, [onError]);
+        const items = await core.monitors();
+        if (live) {
+          setMonitors(items);
+          setSelected(current => items.find(item => item.index === current?.index) ?? items[0]);
+        }
+      } catch (error) { if (live) errors.current(String(error)); }
+    };
+    void refreshMonitors();
+    const monitorTimer = window.setInterval(refreshMonitors, 2000);
+    const poll = async () => {
+      try {
+        const raw = await core.latestFrame(sessionId, sequence);
+        const packet = raw instanceof Uint8Array ? raw : new Uint8Array(raw as unknown as ArrayBuffer);
+        const frame = decodeFramePacket(packet);
+        if (packet.byteLength && !frame) throw new Error(`Invalid frame packet (${packet.byteLength} bytes)`);
+        if (live && frame && frame.sequence > sequence) {
+          sequence = frame.sequence;
+          const target = canvas.current;
+          const context = target?.getContext("2d", { alpha: false });
+          if (target && context) {
+            if (target.width !== frame.width) target.width = frame.width;
+            if (target.height !== frame.height) target.height = frame.height;
+            context.putImageData(new ImageData(new Uint8ClampedArray(frame.pixels), frame.width, frame.height), 0, 0);
+            frames++;
+            bytes += packet.byteLength;
+            const elapsed = performance.now() - started;
+            if (elapsed >= 1000) {
+              setStats({ fps: Math.round(frames * 1000 / elapsed), dropped: frame.dropped,
+                width: frame.width, height: frame.height, bytesPerSecond: bytes * 1000 / elapsed });
+              frames = 0; bytes = 0; started = performance.now();
+            }
+          }
+        }
+      } catch (error) { if (live) errors.current(String(error)); }
+      // At most one IPC request and one frame decode in flight.
+      if (live) timer = window.setTimeout(poll, 16);
+    };
+    void poll();
+    return () => { live = false; window.clearTimeout(timer); window.clearInterval(monitorTimer); release(); };
+  }, [sessionId, release]);
 
-  const coordinates = (clientX: number, clientY: number) => {
-    const target = canvas.current, monitor = selected;
-    if (!target || !monitor) return;
-    const rect = target.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    return { x: Math.round(monitor.x + (clientX - rect.left) * target.width / rect.width), y: Math.round(monitor.y + (clientY - rect.top) * target.height / rect.height) };
+  useEffect(() => { if (!inputAllowed) release(); }, [inputAllowed, release]);
+  useEffect(() => {
+    const blur = () => { setFocused(false); release(); };
+    window.addEventListener("blur", blur);
+    const visibility = () => { if (document.hidden) blur(); };
+    document.addEventListener("visibilitychange", visibility);
+    return () => { window.removeEventListener("blur", blur); document.removeEventListener("visibilitychange", visibility); };
+  }, [release]);
+
+  const coordinates = (x: number, y: number) => selected && canvas.current
+    ? mapCoordinates(x, y, canvas.current.getBoundingClientRect(), selected) : undefined;
+  const queueMove = (point: { x: number; y: number }) => {
+    pendingMove.current = point;
+    if (!raf.current && !moveBusy.current) raf.current = requestAnimationFrame(async () => {
+      raf.current = undefined;
+      const next = pendingMove.current;
+      pendingMove.current = undefined;
+      if (next && allowed.current) {
+        moveBusy.current = true;
+        await send({ kind: "mouseMove", ...next });
+        moveBusy.current = false;
+        if (pendingMove.current) queueMove(pendingMove.current);
+      }
+    });
   };
-  const send = (work: () => Promise<void>) => work().catch(error => onError(String(error)));
-  const queueMove = (point: { x: number; y: number }) => { pendingMove.current = point; if (!raf.current) raf.current = requestAnimationFrame(() => { raf.current = undefined; const next = pendingMove.current; if (next) send(() => core.viewerInput({ kind: "mouseMove", ...next })); }); };
-  const releaseKeys = () => { for (const code of heldKeys.current) send(() => core.viewerInput({ kind: "keyUp", code })); heldKeys.current.clear(); };
-
-  return <article className="card live-viewer"><div className="card-title"><Monitor size={18}/><span>Remote session</span><em>{inputAllowed ? "Input requested" : "View only"}</em><div className="viewer-actions"><button className="icon-button" title="Fullscreen" onClick={() => document.documentElement.requestFullscreen?.().catch(error => onError(String(error)))}><Maximize2 size={17}/></button><button className="secondary" onClick={onDisconnect}><Power size={15}/>Disconnect</button></div></div>
-    <div className="viewer-toolbar"><label><Monitor size={15}/>Remote monitor<select value={selected?.index ?? ""} onChange={event => { const index = Number(event.target.value); send(async () => { await core.selectMonitor(index); setSelected(monitors.find(monitor => monitor.index === index)); }); }}>{monitors.length ? monitors.map(monitor => <option key={monitor.index} value={monitor.index}>{`Display ${monitor.index + 1} · ${monitor.width}×${monitor.height}`}</option>) : <option>Waiting for remote inventory…</option>}</select></label><button className={originalSize ? "tool active" : "tool"} onClick={() => setOriginalSize(value => !value)}><ScanLine size={15}/>{originalSize ? "Original size" : "Fit to window"}</button><span><MousePointer2 size={15}/>{focused ? "Viewer focused" : "Click display to control"}</span><span>{stats.width ? `${stats.width}×${stats.height} · ${stats.fps} fps · ${stats.dropped} dropped` : "Waiting for first frame…"}</span></div>
-    <div className="canvas-shell"><canvas ref={canvas} className={originalSize ? "remote-canvas original" : "remote-canvas"} tabIndex={0} aria-label="Remote desktop display" onFocus={() => setFocused(true)} onBlur={() => { setFocused(false); releaseKeys(); }} onMouseMove={event => { if (inputAllowed) { const point = coordinates(event.clientX, event.clientY); if (point) queueMove(point); } }} onMouseDown={event => { event.currentTarget.focus(); if (inputAllowed) { const point = coordinates(event.clientX, event.clientY); if (point) send(() => core.viewerInput({ kind: "mouseDown", button: event.button === 2 ? 2 : 1, ...point })); } }} onMouseUp={event => { if (inputAllowed) { const point = coordinates(event.clientX, event.clientY); if (point) send(() => core.viewerInput({ kind: "mouseUp", button: event.button === 2 ? 2 : 1, ...point })); } }} onContextMenu={event => event.preventDefault()} onWheel={event => { if (inputAllowed) { event.preventDefault(); send(() => core.viewerInput({ kind: "mouseWheel", dx: Math.round(event.deltaX), dy: Math.round(event.deltaY) })); } }} onKeyDown={event => { if (!inputAllowed) return; const code = remoteKeyCode(event); if (code !== undefined) { event.preventDefault(); heldKeys.current.add(code); send(() => core.viewerInput({ kind: "keyDown", code })); } }} onKeyUp={event => { const code = remoteKeyCode(event); if (code !== undefined) { event.preventDefault(); heldKeys.current.delete(code); send(() => core.viewerInput({ kind: "keyUp", code })); } }} /></div>
+  const fullscreen = () => {
+    const action = document.fullscreenElement ? document.exitFullscreen() : panel.current?.requestFullscreen();
+    action?.catch(error => onError(String(error)));
+  };
+  const flushWheel = async () => {
+    if (wheelBusy.current || !allowed.current) return;
+    const delta = pendingWheel.current;
+    if (!delta.dx && !delta.dy) return;
+    pendingWheel.current = { dx: 0, dy: 0 };
+    wheelBusy.current = true;
+    await send({ kind: "mouseWheel", ...delta });
+    wheelBusy.current = false;
+    if (allowed.current) void flushWheel();
+  };
+  return <article ref={panel} className="live-viewer">
+    <div className="card-title"><Monitor size={18}/><span>Remote session</span><em>{inputAllowed ? "Input requests enabled" : "View only"}</em>
+      <div className="viewer-actions"><button className="icon-button" aria-label="Toggle fullscreen" title="Toggle fullscreen" onClick={fullscreen}><Maximize2 size={17}/></button><button className="button danger" onClick={onDisconnect}><Power size={15}/>Disconnect</button></div>
+    </div>
+    <div className="viewer-toolbar">
+      <label>Remote monitor<select aria-label="Remote monitor" disabled={switching || !monitors.length} value={selected?.index ?? ""} onChange={async event => {
+        const index = Number(event.target.value); release(); setSwitching(true);
+        try { await core.selectMonitor(sessionId, index); setSelected(monitors.find(item => item.index === index)); }
+        catch (error) { onError(String(error)); }
+        finally { setSwitching(false); }
+      }}>{monitors.length ? monitors.map(item => <option key={item.index} value={item.index}>{`Display ${item.index + 1} · ${item.width}×${item.height}`}</option>) : <option>Waiting for displays</option>}</select></label>
+      <button className={originalSize ? "tool active" : "tool"} onClick={() => setOriginalSize(value => !value)}><ScanLine size={15}/>{originalSize ? "Original size" : "Fit to window"}</button>
+      <label><input type="checkbox" checked={inputAllowed} onChange={event => { if (!event.target.checked) release(); onInputAllowed(event.target.checked); }}/>Send input (host approval required)</label>
+      <span>{stats.width ? `${stats.width}×${stats.height} · ${stats.fps} fps · ${stats.dropped} dropped · ${(stats.bytesPerSecond / 1048576).toFixed(1)} MiB/s IPC` : "Waiting for screen frames…"}</span>
+      <span>{focused ? "Display focused" : "Click the display to focus"}</span>
+    </div>
+    <div className="canvas-shell"><canvas ref={canvas} className={originalSize ? "remote-canvas original" : "remote-canvas"} tabIndex={0} aria-label="Remote desktop display"
+      onFocus={() => setFocused(true)} onBlur={() => { setFocused(false); release(); }}
+      onPointerMove={event => {
+        if (focused && inputAllowed && !switching) {
+          const point = coordinates(event.clientX, event.clientY);
+          if (point) { for (const button of heldButtons.current.keys()) heldButtons.current.set(button, point); queueMove(point); }
+        }
+      }}
+      onPointerDown={event => {
+        event.currentTarget.focus();
+        if (!inputAllowed || switching) return;
+        const point = coordinates(event.clientX, event.clientY), button = mouseButton(event.button);
+        if (point && button) { event.currentTarget.setPointerCapture(event.pointerId); heldButtons.current.set(button, point); void send({ kind: "mouseDown", button, ...point }); }
+      }}
+      onPointerUp={event => {
+        const button = mouseButton(event.button), point = coordinates(event.clientX, event.clientY);
+        const held = heldButtons.current.get(button);
+        if (held) { heldButtons.current.delete(button); void send({ kind: "mouseUp", button, ...(point ?? held) }); }
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      }}
+      onLostPointerCapture={release} onContextMenu={event => event.preventDefault()}
+      onWheel={event => {
+        if (inputAllowed && focused && !switching) {
+          event.preventDefault();
+          pendingWheel.current.dx = Math.max(-10, Math.min(10, pendingWheel.current.dx + scrollSteps(event.deltaX, event.deltaMode)));
+          pendingWheel.current.dy = Math.max(-10, Math.min(10, pendingWheel.current.dy + scrollSteps(event.deltaY, event.deltaMode)));
+          void flushWheel();
+        }
+      }}
+      onKeyDown={event => {
+        if (!inputAllowed || switching) return;
+        const code = remoteKeyCode(event);
+        if (code !== undefined) { event.preventDefault(); if (!heldKeys.current.has(event.code)) { heldKeys.current.set(event.code, code); void send({ kind: "keyDown", code }); } }
+      }}
+      onKeyUp={event => {
+        const code = heldKeys.current.get(event.code);
+        if (code !== undefined) { event.preventDefault(); heldKeys.current.delete(event.code); void send({ kind: "keyUp", code }); }
+      }}
+    /></div>
   </article>;
 }

@@ -25,7 +25,7 @@ extern "C" {
 pub fn status() -> DesktopPermissions {
     #[cfg(target_os = "macos")]
     unsafe {
-        return DesktopPermissions {
+        DesktopPermissions {
             platform: "macOS".into(),
             screen_recording: if CGPreflightScreenCaptureAccess() {
                 "granted"
@@ -43,7 +43,7 @@ pub fn status() -> DesktopPermissions {
             // Monitoring is only required for global event observation, which
             // EasyControl does not perform.
             input_monitoring: "not_required".into(),
-        };
+        }
     }
     #[cfg(not(target_os = "macos"))]
     DesktopPermissions {
@@ -57,7 +57,7 @@ pub fn status() -> DesktopPermissions {
 pub fn request_screen_recording() -> bool {
     #[cfg(target_os = "macos")]
     unsafe {
-        return CGRequestScreenCaptureAccess();
+        CGRequestScreenCaptureAccess()
     }
     #[cfg(not(target_os = "macos"))]
     false
@@ -79,7 +79,7 @@ pub fn open_settings(kind: &str) -> Result<(), String> {
             .arg(url)
             .spawn()
             .map_err(|error| error.to_string())?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     Err("open settings is currently supported on macOS only".into())

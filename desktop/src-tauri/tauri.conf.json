@@ -11,12 +11,13 @@
   },
   "app": {
     "windows": [{ "label": "main", "title": "EasyControl", "width": 1200, "height": 800, "minWidth": 920, "minHeight": 640, "resizable": true }],
-    "security": { "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:1420; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" }
+    "security": { "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:1420; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" }
   },
   "bundle": {
     "active": true,
     "targets": "all",
     "category": "Utility",
+    "macOS": { "signingIdentity": "-" },
     "icon": ["icons/icon.icns", "icons/icon.ico", "icons/icon.png"]
   }
 }

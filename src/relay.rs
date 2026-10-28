@@ -14,11 +14,14 @@ use tokio::time;
 const REGISTRATION_TIMEOUT_SECS: u64 = 60;
 const REGISTRATION_MAX_BYTES: usize = 4096;
 const REGISTRATION_DEADLINE_SECS: u64 = 5;
+const MAX_PEERS: usize = 128;
+const MAX_PENDING_HOSTS: usize = 64;
 
 type HmacSha256 = Hmac<Sha256>;
 struct PendingHost {
     stream: TcpStream,
     token: [u8; 32],
+    registered_at: time::Instant,
 }
 
 pub struct RelayServer {
@@ -47,6 +50,7 @@ impl RelayServer {
             tokio::select! {
                 accepted = listener.accept() => {
                     let (stream, peer) = accepted?;
+                    if peers.len() >= MAX_PEERS { drop(stream); continue; }
                     let pending_hosts = pending_hosts.clone();
                     peers.spawn(async move {
                         if let Err(e) = handle_relay_peer(stream, peer, pending_hosts).await {
@@ -94,6 +98,7 @@ async fn handle_relay_peer(
             let session_id = reg.session_id.clone();
             tracing::info!("host registered session {} from {}", session_id, peer);
             let token = reg.token;
+            let registered_at = time::Instant::now();
             let mut sessions = pending_hosts.lock().await;
             if sessions.contains_key(&session_id) {
                 return Err(io::Error::new(
@@ -101,7 +106,17 @@ async fn handle_relay_peer(
                     "relay session already registered",
                 ));
             }
-            sessions.insert(session_id.clone(), PendingHost { stream, token });
+            if sessions.len() >= MAX_PENDING_HOSTS {
+                return Err(io::Error::other("relay registration capacity reached"));
+            }
+            sessions.insert(
+                session_id.clone(),
+                PendingHost {
+                    stream,
+                    token,
+                    registered_at,
+                },
+            );
             drop(sessions);
             // Keep this task alive so the host stream stays registered in pending_hosts.
             // The entry is removed when a client connects and bridges the connection.
@@ -115,7 +130,13 @@ async fn handle_relay_peer(
                 Ok(_) => {}
                 Err(_) => {
                     tracing::info!("host registration timed out for session {}", session_id);
-                    pending_hosts.lock().await.remove(&session_id);
+                    let mut sessions = pending_hosts.lock().await;
+                    if sessions
+                        .get(&session_id)
+                        .is_some_and(|pending| pending.registered_at == registered_at)
+                    {
+                        sessions.remove(&session_id);
+                    }
                 }
             }
             Ok(()) // unreachable
@@ -123,6 +144,14 @@ async fn handle_relay_peer(
         Role::Client { target_session } => {
             let host = {
                 let mut s = pending_hosts.lock().await;
+                if s.get(&target_session)
+                    .is_some_and(|host| host.token != reg.token)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "relay registration token mismatch",
+                    ));
+                }
                 s.remove(&target_session)
             };
 
@@ -130,6 +159,7 @@ async fn handle_relay_peer(
                 Some(PendingHost {
                     stream: mut host_stream,
                     token,
+                    ..
                 }) if token == reg.token => {
                     tracing::info!(
                         "client connected to session {} from {}",
@@ -234,5 +264,42 @@ mod tests {
             registration_token(id, "host secret").unwrap(),
             registration_token("other-id", "host secret").unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn wrong_token_does_not_evict_the_registered_host() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let host_socket = TcpStream::connect(address).await.unwrap();
+        let (host_peer, peer) = listener.accept().await.unwrap();
+        let token = registration_token("waiting", "test").unwrap();
+        let pending = Arc::new(Mutex::new(HashMap::from([(
+            "waiting".into(),
+            PendingHost {
+                stream: host_peer,
+                token,
+                registered_at: time::Instant::now(),
+            },
+        )])));
+        let mut attacker = TcpStream::connect(address).await.unwrap();
+        let (attacker_peer, _) = listener.accept().await.unwrap();
+        let registration = serde_json::to_vec(&Registration {
+            role: Role::Client {
+                target_session: "waiting".into(),
+            },
+            session_id: "waiting".into(),
+            token: [0; 32],
+        })
+        .unwrap();
+        attacker
+            .write_all(&encode_frame(&registration))
+            .await
+            .unwrap();
+        let error = handle_relay_peer(attacker_peer, peer, pending.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(pending.lock().await.contains_key("waiting"));
+        drop(host_socket);
     }
 }

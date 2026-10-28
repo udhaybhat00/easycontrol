@@ -76,6 +76,10 @@ pub enum SessionEvent {
         format: String,
         data: Vec<u8>,
     },
+    /// Local host capture health; this is not a wire-protocol change.
+    ScreenSharing {
+        active: bool,
+    },
     MonitorList {
         monitors: Vec<MonitorInfo>,
     },
@@ -357,12 +361,29 @@ impl SessionManager {
         } else {
             let addr = config
                 .listen_addr
-                .unwrap_or_else(|| "0.0.0.0:5900".parse().unwrap());
+                .unwrap_or_else(|| "0.0.0.0:5899".parse().unwrap());
             let listener = TcpListener::bind(addr).await?;
             info!("easycontrol host listening on {}", listener.local_addr()?);
-            listener.accept().await?.0
+            return Self::start_host_listener(listener, config).await;
         };
         Self::handle_peer(stream, config, true, None, None).await
+    }
+
+    /// Accept on an already-bound listener so desktop callers can report readiness
+    /// only after binding succeeds. Failed authentication never consumes the host.
+    pub async fn start_host_listener(
+        listener: TcpListener,
+        config: SessionConfig,
+    ) -> Result<SessionHandle, CoreError> {
+        validate_password(config.password.as_deref())?;
+        loop {
+            let (stream, _) = listener.accept().await?;
+            match Self::handle_peer(stream, config.clone(), true, None, None).await {
+                Ok(handle) => return Ok(handle),
+                Err(CoreError::Handshake(_) | CoreError::IoTimeout(_)) => continue,
+                Err(error) => return Err(error),
+            }
+        }
     }
     pub async fn start_client(config: SessionConfig) -> Result<SessionHandle, CoreError> {
         validate_password(config.password.as_deref())?;
@@ -381,7 +402,9 @@ impl SessionManager {
             let addr = config.connect_addr.ok_or_else(|| {
                 CoreError::Session("connect_addr required for client mode".into())
             })?;
-            TcpStream::connect(addr).await?
+            tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(addr))
+                .await
+                .map_err(|_| CoreError::IoTimeout(Duration::from_secs(10)))??
         };
         Self::handle_peer(stream, config, false, None, None).await
     }
@@ -571,8 +594,24 @@ impl SessionManager {
                 )
                 .await?;
                 let mut interval = tokio::time::interval(Duration::from_millis(100));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut inventory_tick = 0u32;
+                let mut sharing = false;
+                let mut last_capture_error = None;
                 loop {
                     interval.tick().await;
+                    inventory_tick += 1;
+                    if inventory_tick.is_multiple_of(20) {
+                        let monitors = screen.lock().await.list_monitors()?;
+                        send_channel_msg(
+                            &capture_writer,
+                            &capture_cipher,
+                            &capture_seq,
+                            Channel::Screen,
+                            &ScreenMsg::MonitorList { monitors },
+                        )
+                        .await?;
+                    }
                     let captured = {
                         let mut screen = screen.lock().await;
                         screen.capture_frame().and_then(|data| {
@@ -583,6 +622,7 @@ impl SessionManager {
                     };
                     match captured {
                         Ok((data, (width, height))) => {
+                            last_capture_error = None;
                             send_channel_msg(
                                 &capture_writer,
                                 &capture_cipher,
@@ -617,15 +657,30 @@ impl SessionManager {
                                 },
                             )
                             .await?;
+                            if !sharing || inventory_tick.is_multiple_of(20) {
+                                let _ = capture_events
+                                    .send(SessionEvent::ScreenSharing { active: true });
+                                sharing = true;
+                            }
                         }
                         Err(crate::screen::ScreenError::NotSupported) => {
                             // Keep the session alive when built without capture.
                             std::future::pending::<()>().await;
                         }
                         Err(e) => {
-                            let _ = capture_events.send(SessionEvent::Error {
-                                message: e.to_string(),
-                            });
+                            if sharing {
+                                let _ = capture_events
+                                    .send(SessionEvent::ScreenSharing { active: false });
+                                sharing = false;
+                            }
+                            let message = e.to_string();
+                            if last_capture_error.as_ref() != Some(&message) {
+                                let _ = capture_events.send(SessionEvent::Error {
+                                    message: message.clone(),
+                                });
+                                last_capture_error = Some(message);
+                            }
+                            tokio::time::sleep(Duration::from_secs(1)).await;
                         }
                     }
                 }

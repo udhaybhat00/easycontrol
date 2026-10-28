@@ -244,11 +244,15 @@ pub fn compress_payload(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
 
 #[cfg(feature = "compression")]
 pub fn decompress_payload(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
-    let mut decoder = zstd::stream::read::Decoder::new(data)
+    let decoder = zstd::stream::read::Decoder::new(data)
         .map_err(|e| ProtocolError::Compression(e.to_string()))?;
     let mut out = Vec::new();
-    std::io::Read::read_to_end(&mut decoder, &mut out)
+    let mut limited = std::io::Read::take(decoder, MAX_FRAME_SIZE as u64 + 1);
+    std::io::Read::read_to_end(&mut limited, &mut out)
         .map_err(|e| ProtocolError::Compression(e.to_string()))?;
+    if out.len() > MAX_FRAME_SIZE {
+        return Err(ProtocolError::FrameTooLarge);
+    }
     Ok(out)
 }
 
@@ -260,4 +264,17 @@ pub fn compress_payload(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
 #[cfg(not(feature = "compression"))]
 pub fn decompress_payload(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
     Ok(data.to_vec())
+}
+
+#[cfg(all(test, feature = "compression"))]
+mod compression_tests {
+    use super::*;
+    #[test]
+    fn rejects_decompression_beyond_frame_limit() {
+        let compressed = compress_payload(&vec![0; MAX_FRAME_SIZE + 1]).unwrap();
+        assert!(matches!(
+            decompress_payload(&compressed),
+            Err(ProtocolError::FrameTooLarge)
+        ));
+    }
 }

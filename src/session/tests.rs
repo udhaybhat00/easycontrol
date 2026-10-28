@@ -50,6 +50,118 @@ async fn socket_pair() -> (TcpStream, TcpStream) {
     );
     (host.unwrap().0, client.unwrap())
 }
+
+#[tokio::test]
+async fn rejected_password_leaves_listener_available_for_a_valid_client() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let host = tokio::spawn(SessionManager::start_host_listener(listener, config()));
+    let mut client_config = config();
+    client_config.connect_addr = Some(address);
+    client_config.password = Some("wrong password".into());
+    assert!(SessionManager::start_client(client_config.clone())
+        .await
+        .is_err());
+    client_config.password = config().password;
+    let client = timeout(
+        Duration::from_secs(3),
+        SessionManager::start_client(client_config),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let host = timeout(Duration::from_secs(3), host)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(host.id(), client.id());
+    client.disconnect().await.unwrap();
+    host.disconnect().await.unwrap();
+}
+
+#[tokio::test]
+async fn repeated_sessions_release_the_port_for_immediate_reconnect() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    for _ in 0..5 {
+        let listener = TcpListener::bind(address).await.unwrap();
+        let host = tokio::spawn(SessionManager::start_host_listener(listener, config()));
+        let mut client_config = config();
+        client_config.connect_addr = Some(address);
+        let client = SessionManager::start_client(client_config).await.unwrap();
+        let host = host.await.unwrap().unwrap();
+        client.disconnect().await.unwrap();
+        host.disconnect().await.unwrap();
+        assert_eq!(client.state(), SessionState::Disconnected);
+        assert_eq!(host.state(), SessionState::Disconnected);
+    }
+    let _listener = TcpListener::bind(address).await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelling_a_waiting_host_releases_its_listener() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let host = tokio::spawn(SessionManager::start_host_listener(listener, config()));
+    tokio::task::yield_now().await;
+    host.abort();
+    assert!(matches!(host.await, Err(error) if error.is_cancelled()));
+    let _listener = TcpListener::bind(address).await.unwrap();
+}
+
+#[tokio::test]
+async fn interrupted_transport_closes_both_sessions() {
+    let host_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let host_address = host_listener.local_addr().unwrap();
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_address = proxy_listener.local_addr().unwrap();
+    let bridge = tokio::spawn(async move {
+        let (mut incoming, _) = proxy_listener.accept().await.unwrap();
+        let mut outgoing = TcpStream::connect(host_address).await.unwrap();
+        let _ = tokio::io::copy_bidirectional(&mut incoming, &mut outgoing).await;
+    });
+    let host = tokio::spawn(SessionManager::start_host_listener(host_listener, config()));
+    let mut client_config = config();
+    client_config.connect_addr = Some(proxy_address);
+    let client = SessionManager::start_client(client_config).await.unwrap();
+    let host = host.await.unwrap().unwrap();
+    let mut client_events = client.event_stream();
+    let mut host_events = host.event_stream();
+    bridge.abort();
+    let _ = bridge.await;
+    next_matching(&mut client_events, |event| {
+        matches!(event, SessionEvent::Disconnected { .. })
+    })
+    .await;
+    next_matching(&mut host_events, |event| {
+        matches!(event, SessionEvent::Disconnected { .. })
+    })
+    .await;
+    timeout(Duration::from_secs(1), client.disconnect())
+        .await
+        .unwrap()
+        .unwrap();
+    timeout(Duration::from_secs(1), host.disconnect())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn silent_peer_hits_the_authentication_deadline() {
+    let (_silent_host, client_socket) = socket_pair().await;
+    let result = timeout(
+        Duration::from_secs(12),
+        SessionManager::handle_peer(client_socket, config(), false, None, None),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(result, Err(CoreError::IoTimeout(duration)) if duration == Duration::from_secs(10))
+    );
+}
 async fn pair() -> (SessionHandle, SessionHandle, mpsc::Receiver<InputMsg>) {
     let (host_socket, client_socket) = socket_pair().await;
     let (input_tx, input_rx) = mpsc::channel(16);

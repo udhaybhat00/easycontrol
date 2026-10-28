@@ -1,7 +1,7 @@
 use crate::protocol::InputMsg;
 #[cfg(feature = "input")]
 use enigo::{Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
-#[cfg(feature = "input")]
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 use thiserror::Error;
 
@@ -94,7 +94,7 @@ impl InputInjector for EnigoInjector {
                     1 => Button::Left,
                     2 => Button::Right,
                     3 => Button::Middle,
-                    _ => Button::Left,
+                    _ => return Err(InputError::Injection("invalid mouse button".into())),
                 };
                 enigo
                     .button(btn, Direction::Press)
@@ -127,13 +127,15 @@ impl InputInjector for EnigoInjector {
                 }
             }
             InputMsg::KeyPress { code } => {
-                let key = key_from_code(*code);
+                let key = key_from_code(*code)
+                    .ok_or_else(|| InputError::Injection("unsupported key".into()))?;
                 enigo
                     .key(key, Direction::Press)
                     .map_err(|e| InputError::Injection(e.to_string()))?;
             }
             InputMsg::KeyRelease { code } => {
-                let key = key_from_code(*code);
+                let key = key_from_code(*code)
+                    .ok_or_else(|| InputError::Injection("unsupported key".into()))?;
                 enigo
                     .key(key, Direction::Release)
                     .map_err(|e| InputError::Injection(e.to_string()))?;
@@ -149,8 +151,8 @@ impl InputInjector for EnigoInjector {
 }
 
 #[cfg(feature = "input")]
-fn key_from_code(code: u16) -> Key {
-    match code {
+fn key_from_code(code: u16) -> Option<Key> {
+    Some(match code {
         0x08 => Key::Backspace,
         0x09 => Key::Tab,
         0x0D => Key::Return,
@@ -167,7 +169,8 @@ fn key_from_code(code: u16) -> Key {
         0x26 => Key::UpArrow,
         0x27 => Key::RightArrow,
         0x28 => Key::DownArrow,
-        0x2D => Key::Unicode(' '), // Insert not available on macOS
+        #[cfg(not(target_os = "macos"))]
+        0x2D => Key::Insert,
         0x2E => Key::Delete,
         0x70 => Key::F1,
         0x71 => Key::F2,
@@ -182,14 +185,21 @@ fn key_from_code(code: u16) -> Key {
         0x7A => Key::F11,
         0x7B => Key::F12,
         0x30..=0x39 => Key::Unicode(char::from_u32(code as u32).unwrap_or('0')),
-        0x41..=0x5A => Key::Unicode(char::from_u32(code as u32).unwrap_or('A')),
-        _ => Key::Unicode(' '),
-    }
+        0x41..=0x5A => Key::Unicode((code as u8 as char).to_ascii_lowercase()),
+        _ => return None,
+    })
+}
+
+#[derive(Default)]
+struct HeldInput {
+    keys: BTreeSet<u16>,
+    buttons: BTreeMap<u8, (i32, i32)>,
 }
 
 pub struct InputSession {
     injector: Box<dyn InputInjector>,
     enabled: bool,
+    held: Mutex<HeldInput>,
 }
 
 impl InputSession {
@@ -206,10 +216,14 @@ impl InputSession {
         Self {
             injector,
             enabled: false,
+            held: Mutex::new(HeldInput::default()),
         }
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
+        if !enabled {
+            self.release_all();
+        }
         self.enabled = enabled;
     }
 
@@ -221,7 +235,51 @@ impl InputSession {
         if !self.enabled {
             return Err(InputError::Injection("input disabled".into()));
         }
-        self.injector.inject(msg)
+        let mut held = self
+            .held
+            .lock()
+            .map_err(|error| InputError::Injection(error.to_string()))?;
+        self.injector.inject(msg)?;
+        match msg {
+            InputMsg::KeyPress { code } => {
+                held.keys.insert(*code);
+            }
+            InputMsg::KeyRelease { code } => {
+                held.keys.remove(code);
+            }
+            InputMsg::MousePress { button, x, y } => {
+                held.buttons.insert(*button, (*x, *y));
+            }
+            InputMsg::MouseRelease { button, .. } => {
+                held.buttons.remove(button);
+            }
+            InputMsg::MouseMove { x, y } => {
+                for point in held.buttons.values_mut() {
+                    *point = (*x, *y);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn release_all(&self) {
+        if let Ok(mut held) = self.held.lock() {
+            for code in std::mem::take(&mut held.keys) {
+                let _ = self.injector.inject(&InputMsg::KeyRelease { code });
+            }
+            for (button, (x, y)) in std::mem::take(&mut held.buttons) {
+                let _ = self
+                    .injector
+                    .inject(&InputMsg::MouseRelease { button, x, y });
+            }
+        }
+    }
+}
+
+impl Drop for InputSession {
+    fn drop(&mut self) {
+        self.release_all();
     }
 }
 
@@ -240,6 +298,65 @@ impl Default for InputSession {
         Self {
             injector: default_injector(),
             enabled: false,
+            held: Mutex::new(HeldInput::default()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    struct Recorder(Arc<Mutex<Vec<InputMsg>>>);
+    impl InputInjector for Recorder {
+        fn inject(&self, msg: &InputMsg) -> Result<(), InputError> {
+            self.0.lock().unwrap().push(msg.clone());
+            Ok(())
+        }
+    }
+    #[test]
+    fn revocation_releases_held_keys_and_buttons_and_rejects_more_input() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut session = InputSession::new(Box::new(Recorder(events.clone())));
+        session.set_enabled(true);
+        session.inject(&InputMsg::KeyPress { code: 65 }).unwrap();
+        session
+            .inject(&InputMsg::MousePress {
+                button: 1,
+                x: 10,
+                y: 20,
+            })
+            .unwrap();
+        session.set_enabled(false);
+        assert!(session.inject(&InputMsg::KeyPress { code: 66 }).is_err());
+        let events = events.lock().unwrap();
+        assert!(matches!(events[2], InputMsg::KeyRelease { code: 65 }));
+        assert!(matches!(
+            events[3],
+            InputMsg::MouseRelease {
+                button: 1,
+                x: 10,
+                y: 20
+            }
+        ));
+        assert_eq!(events.len(), 4);
+    }
+    #[test]
+    fn dropping_input_releases_a_held_key() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut session = InputSession::new(Box::new(Recorder(events.clone())));
+        session.set_enabled(true);
+        session.inject(&InputMsg::KeyPress { code: 0x11 }).unwrap();
+        drop(session);
+        assert!(matches!(
+            events.lock().unwrap()[1],
+            InputMsg::KeyRelease { code: 0x11 }
+        ));
+    }
+    #[cfg(feature = "input")]
+    #[test]
+    fn letters_are_lowercase_and_unsupported_keys_are_rejected() {
+        assert_eq!(key_from_code(65), Some(Key::Unicode('a')));
+        assert_eq!(key_from_code(0xffff), None);
     }
 }

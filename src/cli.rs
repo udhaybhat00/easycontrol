@@ -20,7 +20,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Host {
-        #[arg(long, default_value = "0.0.0.0:5900")]
+        #[arg(long, default_value = "0.0.0.0:5899")]
         listen: SocketAddr,
         #[arg(long)]
         password: Option<String>,
@@ -287,10 +287,9 @@ async fn run_client_loop(handle: SessionHandle) -> Result<(), Box<dyn std::error
                         SessionEvent::ScreenFrame { width, height, data, .. } => {
                             let _ = (width, height, data);
                         }
+                        SessionEvent::ScreenSharing { .. } => {}
                         SessionEvent::ClipboardData { data, mime } => {
-                            if let Ok(text) = String::from_utf8(data.clone()) {
-                                println!("\nClipboard ({}): {}", mime, text);
-                            }
+                            println!("\nReceived {} bytes of clipboard data ({})", data.len(), mime);
                             print!("> ");
                             io::stdout().flush()?;
                         }
