@@ -42,12 +42,17 @@ Warnings are not suppressed: bincode, zbus_names, zvariant and zvariant_derive a
 | Tauri format, tests, strict Clippy | PASS: 5 tests |
 | Desktop frontend tests | PASS: 12 tests |
 | TypeScript / Vite production build | PASS |
+| Core release build and all-targets strict Clippy | PASS, including the opt-in QA example |
 | npm audit including dev dependencies | PASS: 0 vulnerabilities |
 | RustSec core / desktop | 0 vulnerability advisories; warnings retained above |
 | Optimized signed production app + DMG build | PASS; notarization skipped because credentials are unavailable |
 | Updated installed app | PASS: launches; Screen Recording and Accessibility still show Granted |
+| Final DMG checksum and complete bundle signature | PASS |
+| Hosted CI for `4436ffd` | BLOCKED before runner assignment; GitHub account billing/spending-limit restriction |
 
 The reconnect regression now runs 32 cycles over actual TCP. Screen/input backends in those automated session tests are mocks, not actual OS validation. Three frontend tests validate release-policy classification with mock metadata; they do not claim actual notarization.
+
+[GitHub run 40971352745](https://github.com/udhaybhat00/easycontrol/actions/runs/40971352745) failed without executing job steps. Its annotation states: “The job was not started because recent account payments have failed or your spending limit needs to be increased.” This is an account execution blocker, not an observed code-test failure. No billing settings or spending limits were changed. Previous baseline macOS runs passed, but those results do not substitute for executing the expanded pipeline at this revision.
 
 ## Distribution gate
 
@@ -81,6 +86,7 @@ The intended target is the unused host-side address field while the app is hosti
 - Finish controlled OS input, permission-denial/revocation and cleanup observations after manual unlock and host approval.
 - Validate actual viewer gestures/fullscreen and extended reliability; multi-monitor coverage requires another physical display.
 - Supply Developer ID signing and notarization credentials through local secure configuration, then rerun the distribution gate and clean-machine installation checks.
+- Resolve the GitHub Actions billing/spending-limit restriction and execute the expanded hosted pipeline; no Windows/Linux CI pass is claimed while it is blocked.
 - Independently review cryptography, authorization and retained maintenance/unsoundness warnings before high-risk deployment.
 - Treat Windows/Linux CI core checks as build/test evidence only, not desktop OS certification.
 
