@@ -85,7 +85,7 @@ async fn repeated_sessions_release_the_port_for_immediate_reconnect() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
-    for _ in 0..5 {
+    for _ in 0..32 {
         let listener = TcpListener::bind(address).await.unwrap();
         let host = tokio::spawn(SessionManager::start_host_listener(listener, config()));
         let mut client_config = config();
@@ -162,6 +162,55 @@ async fn silent_peer_hits_the_authentication_deadline() {
         matches!(result, Err(CoreError::IoTimeout(duration)) if duration == Duration::from_secs(10))
     );
 }
+
+#[test]
+fn configuration_debug_output_redacts_the_password() {
+    let config = config();
+    let diagnostic = format!("{config:?}");
+    assert!(!diagnostic.contains(config.password.as_deref().unwrap()));
+    assert!(diagnostic.contains("[REDACTED]"));
+}
+
+#[tokio::test]
+async fn disconnected_host_cannot_reinitialize_or_report_approved_input() {
+    let (host, client, _) = pair().await;
+    assert!(host.remote_input_enabled());
+    host.disconnect().await.unwrap();
+    assert!(!host.remote_input_enabled());
+    assert!(host.set_remote_input_enabled(true).await.is_err());
+    client.disconnect().await.unwrap();
+}
+
+#[tokio::test]
+async fn malformed_handshake_does_not_consume_the_listener() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let host = tokio::spawn(SessionManager::start_host_listener(listener, config()));
+    let mut malformed = Transport::new(TcpStream::connect(address).await.unwrap());
+    malformed.recv_frame().await.unwrap().unwrap().unwrap();
+    malformed
+        .send_frame(&Frame {
+            channel: Channel::Control,
+            seq: 0,
+            payload: vec![255; 16],
+        })
+        .await
+        .unwrap();
+    assert!(malformed.recv_frame().await.unwrap().is_none());
+    let mut client_config = config();
+    client_config.connect_addr = Some(address);
+    let client = timeout(
+        Duration::from_secs(3),
+        SessionManager::start_client(client_config),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let host = host.await.unwrap().unwrap();
+    client.disconnect().await.unwrap();
+    host.disconnect().await.unwrap();
+}
+
 async fn pair() -> (SessionHandle, SessionHandle, mpsc::Receiver<InputMsg>) {
     let (host_socket, client_socket) = socket_pair().await;
     let (input_tx, input_rx) = mpsc::channel(16);

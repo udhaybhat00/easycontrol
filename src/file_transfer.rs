@@ -169,13 +169,10 @@ impl FileSession {
             let mut options = OpenOptions::new();
             options.create(true).write(true).read(true);
             let mut file = root.root.open_with(&relative, &options)?;
-            if file
-                .metadata()?
-                .len()
-                .max(offset)
-                .saturating_add(data.len() as u64)
-                > MAX_FILE_SIZE
-            {
+            let end = offset
+                .checked_add(data.len() as u64)
+                .ok_or(FileError::TooLarge)?;
+            if file.metadata()?.len().max(end) > MAX_FILE_SIZE {
                 return Err(FileError::TooLarge);
             }
             file.seek(SeekFrom::Start(offset))?;
@@ -231,6 +228,23 @@ mod tests {
             ));
         }
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn bounded_overwrites_do_not_count_existing_bytes_twice() {
+        let root = temporary_root();
+        let files = FileSession::new(&root).await.unwrap();
+        std::fs::File::create(root.join("sparse.bin"))
+            .unwrap()
+            .set_len(MAX_FILE_SIZE)
+            .unwrap();
+        let result = files
+            .write_chunk("sparse.bin", MAX_FILE_SIZE - 4, b"safe")
+            .await;
+        let size = std::fs::metadata(root.join("sparse.bin")).unwrap().len();
+        let _ = std::fs::remove_dir_all(root);
+        assert_eq!(result.unwrap(), 4);
+        assert_eq!(size, MAX_FILE_SIZE);
     }
 
     #[tokio::test]

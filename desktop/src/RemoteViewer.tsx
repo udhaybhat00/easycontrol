@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Maximize2, Monitor, Power, ScanLine } from "lucide-react";
 import { core, decodeFramePacket, type RemoteMonitor, type ViewerInput } from "./bridge";
-import { remoteKeyCode } from "./keymap";
+import { HeldRemoteKeys, remoteKeyCode } from "./keymap";
 import { mapCoordinates, mouseButton, scrollSteps } from "./viewer-utils";
 
 export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDisconnect, onError }: {
@@ -15,10 +15,9 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
   const moveBusy = useRef(false);
   const wheelBusy = useRef(false);
   const pendingWheel = useRef({ dx: 0, dy: 0 });
-  const heldKeys = useRef(new Map<string, number>());
+  const heldKeys = useRef(new HeldRemoteKeys());
   const heldButtons = useRef(new Map<number, { x: number; y: number }>());
   const allowed = useRef(inputAllowed);
-  allowed.current = inputAllowed;
   const errors = useRef(onError);
   errors.current = onError;
   const [monitors, setMonitors] = useState<RemoteMonitor[]>([]);
@@ -27,17 +26,21 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
   const [stats, setStats] = useState({ fps: 0, dropped: 0, width: 0, height: 0, bytesPerSecond: 0 });
   const [originalSize, setOriginalSize] = useState(false);
   const [focused, setFocused] = useState(false);
+  const [inputTransition, setInputTransition] = useState(false);
+  allowed.current = inputAllowed && !inputTransition;
+  const mounted = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
-  const send = useCallback((input: ViewerInput) => core.viewerInput(sessionId, input).catch(error => errors.current(String(error))), [sessionId]);
+  const send = useCallback((input: ViewerInput) => core.viewerInput(sessionId, input).catch(error => { if (mounted.current) errors.current(String(error)); }), [sessionId]);
   const release = useCallback(() => {
     pendingMove.current = undefined;
     pendingWheel.current = { dx: 0, dy: 0 };
     if (raf.current) cancelAnimationFrame(raf.current);
     raf.current = undefined;
-    for (const code of heldKeys.current.values()) void send({ kind: "keyUp", code });
-    heldKeys.current.clear();
-    for (const [button, point] of heldButtons.current) void send({ kind: "mouseUp", button, ...point });
+    const releases = heldKeys.current.releaseAll().map(code => send({ kind: "keyUp", code }));
+    for (const [button, point] of heldButtons.current) releases.push(send({ kind: "mouseUp", button, ...point }));
     heldButtons.current.clear();
+    return Promise.all(releases);
   }, [send]);
 
   useEffect(() => {
@@ -137,21 +140,28 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
         finally { setSwitching(false); }
       }}>{monitors.length ? monitors.map(item => <option key={item.index} value={item.index}>{`Display ${item.index + 1} · ${item.width}×${item.height}`}</option>) : <option>Waiting for displays</option>}</select></label>
       <button className={originalSize ? "tool active" : "tool"} onClick={() => setOriginalSize(value => !value)}><ScanLine size={15}/>{originalSize ? "Original size" : "Fit to window"}</button>
-      <label><input type="checkbox" checked={inputAllowed} onChange={event => { if (!event.target.checked) release(); onInputAllowed(event.target.checked); }}/>Send input (host approval required)</label>
+      <label><input type="checkbox" checked={inputAllowed} disabled={inputTransition} onChange={async event => {
+        const enabled = event.target.checked;
+        setInputTransition(true);
+        try {
+          if (!enabled) { allowed.current = false; await release(); }
+          if (mounted.current) await onInputAllowed(enabled);
+        } finally { if (mounted.current) setInputTransition(false); }
+      }}/>Send input (host approval required)</label>
       <span>{stats.width ? `${stats.width}×${stats.height} · ${stats.fps} fps · ${stats.dropped} dropped · ${(stats.bytesPerSecond / 1048576).toFixed(1)} MiB/s IPC` : "Waiting for screen frames…"}</span>
       <span>{focused ? "Display focused" : "Click the display to focus"}</span>
     </div>
     <div className="canvas-shell"><canvas ref={canvas} className={originalSize ? "remote-canvas original" : "remote-canvas"} tabIndex={0} aria-label="Remote desktop display"
       onFocus={() => setFocused(true)} onBlur={() => { setFocused(false); release(); }}
       onPointerMove={event => {
-        if (focused && inputAllowed && !switching) {
+        if (focused && allowed.current && !switching) {
           const point = coordinates(event.clientX, event.clientY);
           if (point) { for (const button of heldButtons.current.keys()) heldButtons.current.set(button, point); queueMove(point); }
         }
       }}
       onPointerDown={event => {
         event.currentTarget.focus();
-        if (!inputAllowed || switching) return;
+        if (!allowed.current || switching) return;
         const point = coordinates(event.clientX, event.clientY), button = mouseButton(event.button);
         if (point && button) { event.currentTarget.setPointerCapture(event.pointerId); heldButtons.current.set(button, point); void send({ kind: "mouseDown", button, ...point }); }
       }}
@@ -163,7 +173,7 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
       }}
       onLostPointerCapture={release} onContextMenu={event => event.preventDefault()}
       onWheel={event => {
-        if (inputAllowed && focused && !switching) {
+        if (allowed.current && focused && !switching) {
           event.preventDefault();
           pendingWheel.current.dx = Math.max(-10, Math.min(10, pendingWheel.current.dx + scrollSteps(event.deltaX, event.deltaMode)));
           pendingWheel.current.dy = Math.max(-10, Math.min(10, pendingWheel.current.dy + scrollSteps(event.deltaY, event.deltaMode)));
@@ -171,13 +181,17 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
         }
       }}
       onKeyDown={event => {
-        if (!inputAllowed || switching) return;
+        if (!allowed.current || switching) return;
         const code = remoteKeyCode(event);
-        if (code !== undefined) { event.preventDefault(); if (!heldKeys.current.has(event.code)) { heldKeys.current.set(event.code, code); void send({ kind: "keyDown", code }); } }
+        if (code !== undefined) {
+          event.preventDefault();
+          const pressed = heldKeys.current.press(event.code, code);
+          if (pressed !== undefined) void send({ kind: "keyDown", code: pressed });
+        }
       }}
       onKeyUp={event => {
-        const code = heldKeys.current.get(event.code);
-        if (code !== undefined) { event.preventDefault(); heldKeys.current.delete(event.code); void send({ kind: "keyUp", code }); }
+        const code = heldKeys.current.release(event.code);
+        if (code !== undefined) { event.preventDefault(); void send({ kind: "keyUp", code }); }
       }}
     /></div>
   </article>;

@@ -1,3 +1,4 @@
+use bincode::Options;
 use bytes::{Buf, BufMut, BytesMut};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "compression")]
@@ -7,6 +8,16 @@ use thiserror::Error;
 const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
 /// Protocol version. Increment on any incompatible change to the handshake or frame format.
 pub const PROTOCOL_VERSION: u32 = 5;
+
+/// Preserve v5 fixed-width encoding while bounding untrusted lengths and
+/// requiring exactly one message. This applies before authentication too.
+pub fn decode_message<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> bincode::Result<T> {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_limit(bytes.len() as u64)
+        .reject_trailing_bytes()
+        .deserialize(bytes)
+}
 
 #[derive(Debug, Error)]
 pub enum ProtocolError {
@@ -199,6 +210,9 @@ pub struct Frame {
 
 impl Frame {
     pub fn encode(&self) -> Result<BytesMut, ProtocolError> {
+        if bincode::serialized_size(self)? > MAX_FRAME_SIZE as u64 {
+            return Err(ProtocolError::FrameTooLarge);
+        }
         let payload = bincode::serialize(self)?;
         if payload.len() > MAX_FRAME_SIZE {
             return Err(ProtocolError::FrameTooLarge);
@@ -223,10 +237,55 @@ impl Frame {
         }
         buf.advance(4);
         let payload = buf.split_to(len);
-        match bincode::deserialize::<Frame>(payload.as_ref()) {
+        match decode_message::<Frame>(payload.as_ref()) {
             Ok(f) => Some(Ok(f)),
             Err(e) => Some(Err(ProtocolError::Serialization(e))),
         }
+    }
+}
+
+#[cfg(test)]
+mod decoding_tests {
+    use super::*;
+
+    #[test]
+    fn bounded_decoder_preserves_valid_v5_encoding() {
+        let message = ControlMsg::Hello {
+            version: 1,
+            protocol_version: PROTOCOL_VERSION,
+            session_id: "test session".into(),
+            spake2_msg_1: vec![1, 2, 3],
+        };
+        let bytes = bincode::serialize(&message).unwrap();
+        let decoded: ControlMsg = decode_message(&bytes).unwrap();
+        assert_eq!(bincode::serialize(&decoded).unwrap(), bytes);
+    }
+
+    #[test]
+    fn decoder_rejects_trailing_bytes_and_impossible_lengths() {
+        let mut bytes = bincode::serialize(&ControlMsg::Ping).unwrap();
+        bytes.push(0);
+        assert!(decode_message::<ControlMsg>(&bytes).is_err());
+        assert!(decode_message::<Vec<u8>>(&u64::MAX.to_le_bytes()).is_err());
+        assert!(decode_message::<String>(&u64::MAX.to_le_bytes()).is_err());
+    }
+
+    #[test]
+    fn framing_rejects_padding_inside_the_advertised_message() {
+        let mut bytes = Frame {
+            channel: Channel::Control,
+            seq: 0,
+            payload: vec![1],
+        }
+        .encode()
+        .unwrap();
+        let length = bytes.len() as u32 - 4 + 1;
+        bytes[..4].copy_from_slice(&length.to_be_bytes());
+        bytes.extend_from_slice(&[0]);
+        assert!(matches!(
+            Frame::decode(&mut bytes),
+            Some(Err(ProtocolError::Serialization(_)))
+        ));
     }
 }
 

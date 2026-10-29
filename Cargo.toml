@@ -28,8 +28,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 xcap = { version = "0.9.8", optional = true }
 enigo = { version = "0.6.1", optional = true }
-zstd = { version = "0.13", optional = true }
-x25519-dalek = { version = "1.1", optional = true }
+zstd = { version = "0.14.3", optional = true }
 getrandom = "0.2"
 arboard = "3.4"
 cap-std = "3"
@@ -40,10 +39,12 @@ default = ["crypto"]
 capture = ["xcap"]
 input = ["enigo"]
 compression = ["zstd"]
-crypto = ["x25519-dalek"]
+# Retain the public feature name; SPAKE2 and encrypted sessions are always on.
+# The unused legacy x25519 dependency was removed after a RustSec finding.
+crypto = []
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 
 [profile.release]
 opt-level = 3

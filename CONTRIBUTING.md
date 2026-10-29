@@ -10,7 +10,7 @@ For a bug report, include the revision, OS version, reproduction steps, expected
 
 ## Development
 
-Use Rust stable, Node.js 20+ and npm. Run `npm ci` inside `desktop/` before frontend work. Follow [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for the host platform. macOS is the currently exercised desktop packaging path.
+Use Rust stable, Node.js 22.12+ and npm. Run `npm ci` inside `desktop/` before frontend work. Follow [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for the host platform. macOS is the currently exercised desktop packaging path.
 
 Run the relevant checks from the repository root:
 

@@ -3,7 +3,7 @@ use bytes::BytesMut;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::time::timeout;
+use tokio::time::{timeout, timeout_at, Instant};
 
 pub struct Transport<S = TcpStream> {
     stream: S,
@@ -80,6 +80,8 @@ impl<S: tokio::io::AsyncRead + Unpin> Transport<S> {
     pub async fn recv_frame(
         &mut self,
     ) -> Result<Option<Result<Frame, ProtocolError>>, std::io::Error> {
+        // A partial-frame sender must not renew its deadline byte by byte.
+        let deadline = Instant::now() + Duration::from_secs(READ_DEADLINE_SECS);
         loop {
             if let Some(result) = Frame::decode(&mut self.read_buf) {
                 return Ok(Some(result));
@@ -91,14 +93,56 @@ impl<S: tokio::io::AsyncRead + Unpin> Transport<S> {
                     "read buffer exceeded maximum size",
                 ));
             }
-            let n = timeout(
-                Duration::from_secs(READ_DEADLINE_SECS),
-                self.stream.read_buf(&mut self.read_buf),
-            )
-            .await??;
+            let n = timeout_at(deadline, self.stream.read_buf(&mut self.read_buf)).await??;
             if n == 0 {
+                if !self.read_buf.is_empty() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "peer closed in the middle of a frame",
+                    ));
+                }
                 return Ok(None);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn truncated_frame_is_an_error_instead_of_clean_eof() {
+        let (mut writer, reader) = tokio::io::duplex(64);
+        writer.write_all(&[0, 0, 0, 12, 1, 2]).await.unwrap();
+        drop(writer);
+        let mut transport = Transport {
+            stream: reader,
+            read_buf: BytesMut::new(),
+        };
+        let error = transport.recv_frame().await.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn drip_fed_bytes_do_not_reset_the_frame_deadline() {
+        let (mut writer, reader) = tokio::io::duplex(64);
+        let slow_peer = tokio::spawn(async move {
+            for byte in [0, 0, 0, 12] {
+                tokio::time::sleep(Duration::from_secs(20)).await;
+                if writer.write_all(&[byte]).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let mut transport = Transport {
+            stream: reader,
+            read_buf: BytesMut::new(),
+        };
+        let started = tokio::time::Instant::now();
+        let error = transport.recv_frame().await.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert_eq!(started.elapsed(), Duration::from_secs(READ_DEADLINE_SECS));
+        slow_peer.abort();
     }
 }

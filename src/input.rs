@@ -159,6 +159,7 @@ fn key_from_code(code: u16) -> Option<Key> {
         0x10 => Key::Control,
         0x11 => Key::Shift,
         0x12 => Key::Alt,
+        0x14 => Key::CapsLock,
         0x1B => Key::Escape,
         0x20 => Key::Space,
         0x21 => Key::PageUp,
@@ -184,6 +185,17 @@ fn key_from_code(code: u16) -> Option<Key> {
         0x79 => Key::F10,
         0x7A => Key::F11,
         0x7B => Key::F12,
+        0xBA => Key::Unicode(';'),
+        0xBB => Key::Unicode('='),
+        0xBC => Key::Unicode(','),
+        0xBD => Key::Unicode('-'),
+        0xBE => Key::Unicode('.'),
+        0xBF => Key::Unicode('/'),
+        0xC0 => Key::Unicode('`'),
+        0xDB => Key::Unicode('['),
+        0xDC => Key::Unicode('\\'),
+        0xDD => Key::Unicode(']'),
+        0xDE => Key::Unicode('\''),
         0x30..=0x39 => Key::Unicode(char::from_u32(code as u32).unwrap_or('0')),
         0x41..=0x5A => Key::Unicode((code as u8 as char).to_ascii_lowercase()),
         _ => return None,
@@ -283,23 +295,11 @@ impl Drop for InputSession {
     }
 }
 
-#[cfg(feature = "input")]
-fn default_injector() -> Box<dyn InputInjector> {
-    Box::new(EnigoInjector::default())
-}
-
-#[cfg(not(feature = "input"))]
-fn default_injector() -> Box<dyn InputInjector> {
-    Box::new(NullInjector)
-}
-
 impl Default for InputSession {
     fn default() -> Self {
-        Self {
-            injector: default_injector(),
-            enabled: false,
-            held: Mutex::new(HeldInput::default()),
-        }
+        // A disabled placeholder must never initialize an OS injector or panic
+        // on a missing grant. Call try_default() for an actual approved backend.
+        Self::new(Box::new(NullInjector))
     }
 }
 
@@ -342,6 +342,13 @@ mod tests {
         assert_eq!(events.len(), 4);
     }
     #[test]
+    fn disabled_default_has_no_os_backend_or_permission_requirement() {
+        let session = InputSession::default();
+        assert!(!session.is_enabled());
+        assert!(session.inject(&InputMsg::KeyPress { code: 65 }).is_err());
+    }
+
+    #[test]
     fn dropping_input_releases_a_held_key() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let mut session = InputSession::new(Box::new(Recorder(events.clone())));
@@ -357,6 +364,8 @@ mod tests {
     #[test]
     fn letters_are_lowercase_and_unsupported_keys_are_rejected() {
         assert_eq!(key_from_code(65), Some(Key::Unicode('a')));
+        assert_eq!(key_from_code(0xBA), Some(Key::Unicode(';')));
+        assert_eq!(key_from_code(0xDE), Some(Key::Unicode('\'')));
         assert_eq!(key_from_code(0xffff), None);
     }
 }

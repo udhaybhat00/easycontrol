@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   macos:
     runs-on: macos-latest
@@ -32,6 +36,8 @@ jobs:
         working-directory: desktop
       - run: npm test
         working-directory: desktop
+      - run: npm audit --audit-level=low
+        working-directory: desktop
       - run: npm run build
         working-directory: desktop
       - run: cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
@@ -39,3 +45,28 @@ jobs:
       - run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml -- -D warnings
       - run: npm run tauri:build -- --debug --bundles app
         working-directory: desktop
+
+  core-portability:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo test --locked --no-default-features
+      - run: cargo clippy --locked --no-default-features -- -D warnings
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-audit --version 0.22.2 --locked --no-default-features
+      - run: cargo audit --file Cargo.lock
+      - run: cargo audit --file desktop/src-tauri/Cargo.lock

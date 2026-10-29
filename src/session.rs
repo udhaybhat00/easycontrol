@@ -26,7 +26,7 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Configuration for starting an easycontrol session.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SessionConfig {
     pub listen_addr: Option<SocketAddr>,
     pub connect_addr: Option<SocketAddr>,
@@ -40,6 +40,24 @@ pub struct SessionConfig {
     pub enable_clipboard: bool,
     pub enable_chat: bool,
     pub enable_file_transfer: bool,
+}
+
+impl std::fmt::Debug for SessionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionConfig")
+            .field("listen_addr", &self.listen_addr)
+            .field("connect_addr", &self.connect_addr)
+            .field("relay_addr", &self.relay_addr)
+            .field("session_id", &self.session_id)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("file_root", &self.file_root)
+            .field("enable_input", &self.enable_input)
+            .field("enable_capture", &self.enable_capture)
+            .field("enable_clipboard", &self.enable_clipboard)
+            .field("enable_chat", &self.enable_chat)
+            .field("enable_file_transfer", &self.enable_file_transfer)
+            .finish()
+    }
 }
 
 impl Default for SessionConfig {
@@ -312,6 +330,9 @@ impl SessionHandle {
             ));
         }
         let mut input = self.inner.input.lock().await;
+        if enabled && self.state() != SessionState::Connected {
+            return Err(CoreError::Session("session closed".into()));
+        }
         if enabled && input.is_none() {
             *input = Some(
                 InputSession::try_default()
@@ -523,6 +544,7 @@ impl SessionManager {
         };
         let mut tasks = JoinSet::new();
         let cleanup_input = input.clone();
+        let cleanup_input_allowed = input_allowed.clone();
         let send_writer = writer.clone();
         let send_cipher = cipher.clone();
         let send_seq = seq.clone();
@@ -720,6 +742,7 @@ impl SessionManager {
             // backend here so disconnect does not retain an injector or its
             // resources until the last handle is dropped.
             *cleanup_input.lock().await = None;
+            cleanup_input_allowed.store(false, Ordering::Release);
             *state.lock().unwrap() = SessionState::Disconnected;
             let _ = event_tx.send(SessionEvent::Disconnected { reason });
             let _ = done_tx.send(true);
@@ -779,7 +802,7 @@ async fn receive_loop(
         let frame = frame?;
         let plain = decrypt_frame(&mut *cipher.lock().await, &frame, &mut last_seq)?;
         match frame.channel {
-            Channel::Control => match bincode::deserialize::<ControlMsg>(&plain)? {
+            Channel::Control => match crate::protocol::decode_message::<ControlMsg>(&plain)? {
                 ControlMsg::Bye { .. } => return Ok(()),
                 ControlMsg::Ping => {
                     send_channel_msg(&writer, &cipher, &seq, Channel::Control, &ControlMsg::Pong)
@@ -791,7 +814,7 @@ async fn receive_loop(
                 _ => {}
             },
             Channel::Input if is_host && input_allowed.load(Ordering::Acquire) => {
-                let msg: InputMsg = bincode::deserialize(&plain)?;
+                let msg: InputMsg = crate::protocol::decode_message(&plain)?;
                 if let Some(input) = input.lock().await.as_ref() {
                     if let Err(e) = input.inject(&msg) {
                         let _ = events.send(SessionEvent::Error {
@@ -810,7 +833,7 @@ async fn receive_loop(
                 )
                 .await?
             }
-            Channel::Screen => match bincode::deserialize::<ScreenMsg>(&plain)? {
+            Channel::Screen => match crate::protocol::decode_message::<ScreenMsg>(&plain)? {
                 ScreenMsg::FrameInit {
                     width,
                     height,
@@ -872,7 +895,7 @@ async fn receive_loop(
                 _ => {}
             },
             Channel::Clipboard if is_host && config.enable_clipboard => {
-                match bincode::deserialize::<ClipboardMsg>(&plain)? {
+                match crate::protocol::decode_message::<ClipboardMsg>(&plain)? {
                     ClipboardMsg::Get => {
                         let (data, mime) = match clipboard
                             .as_mut()
@@ -948,22 +971,24 @@ async fn receive_loop(
                 )
                 .await?
             }
-            Channel::Clipboard if !is_host => match bincode::deserialize::<ClipboardMsg>(&plain)? {
-                ClipboardMsg::GetAck { data, mime } => {
-                    let text = validate_bytes(&data)
-                        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-                    if mime != "text/plain" {
-                        return Err(anyhow::anyhow!("unsupported clipboard MIME type"));
+            Channel::Clipboard if !is_host => {
+                match crate::protocol::decode_message::<ClipboardMsg>(&plain)? {
+                    ClipboardMsg::GetAck { data, mime } => {
+                        let text = validate_bytes(&data)
+                            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                        if mime != "text/plain" {
+                            return Err(anyhow::anyhow!("unsupported clipboard MIME type"));
+                        }
+                        let _ = events.send(SessionEvent::ClipboardData {
+                            data: text.as_bytes().to_vec(),
+                            mime,
+                        });
                     }
-                    let _ = events.send(SessionEvent::ClipboardData {
-                        data: text.as_bytes().to_vec(),
-                        mime,
-                    });
+                    _ => return Err(anyhow::anyhow!("unexpected clipboard request from host")),
                 }
-                _ => return Err(anyhow::anyhow!("unexpected clipboard request from host")),
-            },
+            }
             Channel::Chat if config.enable_chat => {
-                let ChatMsg::Message { from, text, .. } = bincode::deserialize(&plain)?;
+                let ChatMsg::Message { from, text, .. } = crate::protocol::decode_message(&plain)?;
                 let _ = events.send(SessionEvent::ChatMessage { from, text });
             }
             Channel::Chat if is_host => {
@@ -973,7 +998,7 @@ async fn receive_loop(
                 let file = files
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("file backend unavailable"))?;
-                match bincode::deserialize::<FileMsg>(&plain)? {
+                match crate::protocol::decode_message::<FileMsg>(&plain)? {
                     FileMsg::ListDir { path } => match file.list_dir(&path).await {
                         Ok(entries) => {
                             send_channel_msg(
@@ -1052,26 +1077,28 @@ async fn receive_loop(
                 )
                 .await?
             }
-            Channel::File if !is_host => match bincode::deserialize::<FileMsg>(&plain)? {
-                FileMsg::ListDirAck { entries } => {
-                    let _ = events.send(SessionEvent::FileList { entries });
-                }
-                FileMsg::ReadData { path, offset, data } => {
-                    let _ = events.send(SessionEvent::FileData { path, offset, data });
-                }
-                FileMsg::WriteAck {
-                    path,
-                    offset,
-                    bytes_written,
-                } => {
-                    let _ = events.send(SessionEvent::FileWritten {
+            Channel::File if !is_host => {
+                match crate::protocol::decode_message::<FileMsg>(&plain)? {
+                    FileMsg::ListDirAck { entries } => {
+                        let _ = events.send(SessionEvent::FileList { entries });
+                    }
+                    FileMsg::ReadData { path, offset, data } => {
+                        let _ = events.send(SessionEvent::FileData { path, offset, data });
+                    }
+                    FileMsg::WriteAck {
                         path,
                         offset,
                         bytes_written,
-                    });
+                    } => {
+                        let _ = events.send(SessionEvent::FileWritten {
+                            path,
+                            offset,
+                            bytes_written,
+                        });
+                    }
+                    _ => return Err(anyhow::anyhow!("unexpected file request from host")),
                 }
-                _ => return Err(anyhow::anyhow!("unexpected file request from host")),
-            },
+            }
             _ => {}
         }
     }
@@ -1214,7 +1241,7 @@ async fn host_spake2_handshake(
         })
         .await?;
     let ack = read_handshake(transport).await?.payload;
-    let peer_message = match bincode::deserialize::<ControlMsg>(&ack)? {
+    let peer_message = match crate::protocol::decode_message::<ControlMsg>(&ack)? {
         ControlMsg::HelloAck {
             accepted: true,
             protocol_version: PROTOCOL_VERSION,
@@ -1234,7 +1261,7 @@ async fn client_spake2_handshake(
     password: Option<&str>,
 ) -> anyhow::Result<(String, SessionCipher)> {
     let hello = read_handshake(transport).await?.payload;
-    let (sid, peer_message) = match bincode::deserialize::<ControlMsg>(&hello)? {
+    let (sid, peer_message) = match crate::protocol::decode_message::<ControlMsg>(&hello)? {
         ControlMsg::Hello {
             version: 1,
             protocol_version: PROTOCOL_VERSION,
@@ -1295,7 +1322,7 @@ async fn confirm_session(
     anyhow::ensure!(
         frame.seq == 1
             && matches!(
-                bincode::deserialize::<ControlMsg>(&plain)?,
+                crate::protocol::decode_message::<ControlMsg>(&plain)?,
                 ControlMsg::Confirm { confirmed: true }
             ),
         "invalid key confirmation"

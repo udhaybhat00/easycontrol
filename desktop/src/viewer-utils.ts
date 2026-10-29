@@ -11,9 +11,13 @@ export function mapCoordinates(clientX: number, clientY: number,
 
 // The Rust bridge accepts numeric SocketAddr, including bracketed IPv6.
 export function validEndpoint(address: string) {
-  const match = /^(\[[0-9a-fA-F:]+\]|\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})$/.exec(address.trim());
+  const match = /^(\[[0-9a-fA-F:.]+\]|\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})$/.exec(address.trim());
   if (!match || Number(match[2]) < 1 || Number(match[2]) > 65535) return false;
-  return match[1].startsWith("[") || match[1].split(".").every(part => Number(part) <= 255);
+  if (match[1].startsWith("[")) {
+    try { return new URL(`http://${match[1]}`).hostname.startsWith("["); }
+    catch { return false; }
+  }
+  return match[1].split(".").every(part => /^(0|[1-9]\d{0,2})$/.test(part) && Number(part) <= 255);
 }
 export function mouseButton(button: number) { return [1, 3, 2][button]; }
 export function scrollSteps(delta: number, mode: number) {

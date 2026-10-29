@@ -25,6 +25,8 @@ EasyControl is an MIT-licensed remote-desktop application built with **Rust, Tau
 > [!IMPORTANT]
 > **This is development software, not a production-ready release.** Real macOS capture and rendering have been observed. Controlled real input, extended two-machine QA, distribution signing and notarization remain release gates. No public signed installer is available yet. See [validation](#validation-and-release-status).
 
+Latest follow-up: [release hardening — 30 October 2026](docs/HARDENING-2026-10-30.md), including dependency audits, additional regressions and the fail-closed macOS distribution gate.
+
 ## Contents
 
 - [The workspace](#the-workspace)
@@ -79,7 +81,7 @@ There is no global device-ID service, account requirement, device discovery or a
 ### Prerequisites
 
 - Rust stable with Cargo, rustfmt and Clippy.
-- Node.js **20+** and npm.
+- Node.js **22.12+** and npm.
 - Native [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform.
 - On macOS, Xcode Command Line Tools and the permissions described below.
 - Access to the application repository, which is currently private. The public website repository contains no application source.
@@ -181,7 +183,7 @@ The core exposes `SessionManager`, `SessionHandle`, `SessionConfig`, `SessionCom
 | `capture` | OS screen-capture backend through xcap |
 | `input` | OS input backend through Enigo |
 | `compression` | zstd frame compression |
-| `crypto` | Default compatibility feature enabling the optional x25519 dependency; current SPAKE2/session encryption code is not disabled by omitting it |
+| `crypto` | Retained compatibility feature; SPAKE2 and session encryption are always enabled. An unused legacy x25519 dependency was removed after a RustSec advisory. |
 
 The desktop crate enables capture, input and compression. Run `cargo run -- --help` for the headless CLI; it is separate from the graphical viewer.
 
