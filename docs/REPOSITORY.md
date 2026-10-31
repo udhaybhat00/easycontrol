@@ -14,7 +14,7 @@ The former `easycontrol-website` repository's tracked files matched `website/` b
 
 ## Publication boundary
 
-The retained repository remains private. The former website URL is scheduled for retirement. The owner confirmed deletion. Manual completion is pending: the CLI token lacks `delete_repo` permission and browser automation fails with `AXError.invalidUIElement` at the confirmation button. `https://udhaybhat00.github.io/easycontrol/` is the intended canonical URL, not a verified live deployment.
+The retained repository remains private. The owner completed deletion of `udhaybhat00/easycontrol-website` on 31 October 2026. An authenticated GitHub API lookup returned HTTP 404 afterward, while `udhaybhat00/easycontrol` remained accessible and private with its pushed `master` branch intact. The former website deployment is retired. `https://udhaybhat00.github.io/easycontrol/` is the intended canonical URL, not a verified live deployment.
 
 Pages activation is not part of this consolidation: automatic approval review rejected enabling it because publication could expose content from a private repository. A future deployment needs explicit owner approval for public website publication and a GitHub plan supporting Pages from this private repository. No source visibility, billing, or spending setting was changed.
 
