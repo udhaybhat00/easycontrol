@@ -1,12 +1,12 @@
 # EasyControl website
 
-The public product website and documentation for EasyControl, a Rust + Tauri remote-desktop application. This repository contains **only website source and reviewed application screenshots**. It does not contain the private application source, session credentials, captured remote screens or signing material.
+The product website and documentation for EasyControl, maintained alongside the Rust engine and Tauri desktop app in **udhaybhat00/easycontrol**. This directory is the only maintained website source. The former website-only repository and deployment are retired.
 
-**Live site:** https://udhaybhat00.github.io/easycontrol-website/
+**Hosting status:** no verified live deployment from this repository. The intended URL is `https://udhaybhat00.github.io/easycontrol/`. The repository remains private and the current plan previously rejected GitHub Pages. Canonical metadata is not proof of a live deployment.
 
 ## Develop
 
-Requires Node.js 20+. No npm dependencies are installed. Python 3 is used only for the local preview server.
+Requires Node.js 22.12+. No npm dependencies are installed. Python 3 is used only for the local preview server.
 
 ```bash
 npm run build
@@ -29,14 +29,14 @@ Open http://127.0.0.1:4173. The build outputs `dist/`, which is ignored by Git. 
 ├── build.mjs            Dependency-free static build
 ├── tests/               Build, links, anchors and privacy checks
 ├── site.config.json     Canonical website configuration
-└── .github/workflows/   GitHub Pages build and deployment
+└── ../.github/workflows/website.yml   Root website workflow
 ```
 
 ## Deployment
 
-GitHub Pages uses GitHub Actions. The workflow tests and builds this static site, uploads only `dist/` and deploys with `actions/deploy-pages`. It runs on pushes to `main` and can be started manually. In repository Settings → Pages, select **GitHub Actions** as the build source.
+The root workflow tests and builds this static site on relevant pushes to `master` and pull requests, and can be started manually. Deployment stays disabled until the owner approves publication, enables Pages with GitHub Actions on a supported plan, and sets the Actions repository variable `PAGES_ENABLED` to `true`. It uploads only `website/dist/`, never application source, QA logs or signing material.
 
-The authoritative development copy also lives in `website/` inside the application repository. To publish an update, copy the reviewed website files into this website-only checkout, run the checks, then commit and push. Do not copy app source, QA logs, credentials or private remote screenshots into this public repository.
+A published Pages site can be public even when its source repository is private. Do not make the application repository public as a workaround without explicit owner approval. For another static host, set `SITE_URL` during the build and publish only `dist/`. No cross-repository copying is needed.
 
 ## Design and accessibility
 
@@ -46,10 +46,10 @@ The site loads no third-party fonts, analytics, trackers or runtime dependencies
 
 ## Product status
 
-EasyControl is development software. The website explicitly distinguishes observed macOS behavior from automated/mock coverage and untested release gates. The application repository currently requires access. There is no public signed installer release yet.
+EasyControl is development software. The website distinguishes observed macOS behavior from automated/mock coverage and untested release gates. This repository currently requires access. There is no public distribution-ready installer release yet. See the [latest hardening report](../docs/HARDENING-2026-10-30.md).
 
 ## Credits and license
 
 Created by [Udhay Bhat](https://github.com/udhaybhat00) · [LinkedIn](https://in.linkedin.com/in/udhaybhat).
 
-[MIT License](LICENSE). Copyright © 2026 Udhay Bhat.
+[MIT License](../LICENSE). Copyright © 2026 Udhay Bhat.

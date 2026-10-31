@@ -7,8 +7,8 @@
 <p align="center"><strong>Direct remote desktop. A Rust engine. A native workspace.</strong></p>
 
 <p align="center">
-  <a href="https://udhaybhat00.github.io/easycontrol-website/">Website</a> ·
-  <a href="https://udhaybhat00.github.io/easycontrol-website/docs.html">Documentation</a> ·
+  <a href="website/">Website source</a> ·
+  <a href="website/docs.html">Documentation source</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="docs/QA-2026-10-28.md">QA report</a> ·
   <a href="CONTRIBUTING.md">Contribute</a>
@@ -84,7 +84,7 @@ There is no global device-ID service, account requirement, device discovery or a
 - Node.js **22.12+** and npm.
 - Native [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform.
 - On macOS, Xcode Command Line Tools and the permissions described below.
-- Access to the application repository, which is currently private. The public website repository contains no application source.
+- Access to this repository, which is currently private. The application, website and documentation are maintained together here.
 
 ### Clone and validate the engine
 
@@ -223,11 +223,12 @@ easycontrol/
 │       ├── src/permissions.rs   macOS permission APIs
 │       ├── tauri.conf.json      Production app configuration
 │       └── tauri.qa.conf.json   Isolated development QA profile
-├── website/                    Product website and public documentation
+├── website/                    Product website, documentation, screenshots and site tests
 ├── docs/
 │   ├── assets/banner.svg       Project artwork
-│   └── QA-2026-10-28.md         Evidence, measurements and release gates
-├── .github/workflows/          macOS validation
+│   ├── QA-2026-10-28.md         Real desktop observations and measurements
+│   └── HARDENING-2026-10-30.md  Latest hardening, validation and release gates
+├── .github/workflows/          Core/desktop validation and website build/deployment
 ├── CONTRIBUTING.md
 ├── SECURITY.md
 ├── CHANGELOG.md
@@ -279,13 +280,16 @@ Keep **Send input unchecked** during recursive same-Mac screen capture unless an
 
 ## Validation and release status
 
-**Local baseline recorded 28 October 2026:** 49 passing tests; 1 permission-dependent capture test ignored.
+**Latest local validation recorded 30 October 2026:** 65 passing application tests; 1 permission-dependent capture test ignored. Website tests are counted separately. These are recorded results, not a claim that every future commit has passed.
 
 | Suite / check | Observed result |
 | :-- | :-- |
-| Rust core | 37 library + 1 public API integration passed; 1 ignored |
+| Rust core | 47 library + 1 public API integration passed; 1 ignored |
 | Tauri bridge | 5 tests passed |
-| Frontend | 6 tests passed |
+| Frontend | 12 tests passed |
+| Website | 6 tests passed; static build passed |
+| Dependency audits | No vulnerability advisories in either Cargo lockfile; npm audit clean. Upstream maintenance/unsoundness warnings remain documented. |
+| Latest hosted CI | Blocked before execution by GitHub billing/spending restrictions |
 | Format, checks and strict Clippy | Passed |
 | Core release / frontend production builds | Passed |
 | Optimized macOS production and QA app builds | Passed |
@@ -299,7 +303,7 @@ Keep **Send input unchecked** during recursive same-Mac screen capture unless an
 
 Observed same-Mac frames were **2880×1800**, up to **10 FPS**. Background viewer FPS varied and native unread-frame replacements occurred. Sampled native host CPU was about **27%** and client **12–22%**, excluding WebKit/helpers. These are initial observations, not a cross-platform performance guarantee or end-to-end latency benchmark.
 
-See the [full QA report](docs/QA-2026-10-28.md) for the PASS / BLOCKED / NOT TESTED matrix, actual sample boundaries, confirmed fixes and remaining release gates. Automated mock-backend tests do not prove real OS capture or input.
+See the [desktop QA report](docs/QA-2026-10-28.md) for the original observations and the [latest hardening report](docs/HARDENING-2026-10-30.md) for current automated results, audit warnings and distribution gates. Automated mock-backend tests do not prove real OS capture or input.
 
 ## Troubleshooting
 
@@ -334,15 +338,17 @@ Check host Accessibility, host approval, client Send input and viewer focus. The
 <details>
 <summary><strong>A source link returns 404</strong></summary>
 
-The application repository currently requires access. Sign in using an authorized account or contact the maintainer. The separate public website repository does not contain application code.
+This repository currently requires access. Sign in using an authorized account or contact the maintainer. Application and website source are both maintained here.
 
 </details>
 
 ## Website
 
-**[Visit the website](https://udhaybhat00.github.io/easycontrol-website/)** · [Public website source](https://github.com/udhaybhat00/easycontrol-website)
+**[Website source](website/)** · [Website maintenance guide](website/README.md)
 
-The dependency-free static site lives in `website/` and is published from a separate public repository, preserving the application repository’s privacy. It includes actual screenshots, a build/usage guide, architecture and validation details, search, copy buttons, responsive navigation, reduced-motion support and System/Light/Dark appearance.
+The dependency-free static site lives in `website/` in this repository alongside the application. It includes actual screenshots, a build/usage guide, architecture and validation details, search, copy buttons, responsive navigation, reduced-motion support and System/Light/Dark appearance. There is no separate website repository to synchronize.
+
+**Hosting status:** the former website-only deployment is retired. Pages publication from this private repository is not enabled; the current GitHub plan previously rejected it. The intended URL is `https://udhaybhat00.github.io/easycontrol/`, not a live-site claim. Keep the repository private unless its owner explicitly chooses otherwise. The root [website workflow](.github/workflows/website.yml) validates the site on every relevant change; deployment requires Pages availability, owner approval to publish the static site, and the repository variable `PAGES_ENABLED=true`.
 
 ```bash
 cd website

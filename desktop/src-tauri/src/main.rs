@@ -344,6 +344,7 @@ fn open_creator_profile(profile: String) -> Result<(), String> {
     let url = match profile.as_str() {
         "source" => "https://github.com/udhaybhat00/easycontrol",
         "issues" => "https://github.com/udhaybhat00/easycontrol/issues",
+        "docs" => "https://github.com/udhaybhat00/easycontrol#your-first-session",
         "github" => "https://github.com/udhaybhat00",
         "linkedin" => "https://in.linkedin.com/in/udhaybhat",
         _ => return Err("Unknown creator profile".into()),
