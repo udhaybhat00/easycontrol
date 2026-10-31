@@ -2,7 +2,7 @@
 
 The product website and documentation for EasyControl, maintained alongside the Rust engine and Tauri desktop app in **udhaybhat00/easycontrol**. This directory is the only maintained website source. The former website-only repository was deleted by the owner on 31 October 2026; its old Pages deployment is retired.
 
-**Hosting status:** no verified live deployment from this repository. The intended URL is `https://udhaybhat00.github.io/easycontrol/`. The repository remains private and the current plan previously rejected GitHub Pages. Canonical metadata is not proof of a live deployment.
+**Public website:** https://udhaybhat00.github.io/easycontrol/ · [Documentation](https://udhaybhat00.github.io/easycontrol/docs.html). The application, site and documentation source are public in the same repository.
 
 ## Develop
 
@@ -34,9 +34,9 @@ Open http://127.0.0.1:4173. The build outputs `dist/`, which is ignored by Git. 
 
 ## Deployment
 
-The root workflow tests and builds this static site on relevant pushes to `master` and pull requests, and can be started manually. Deployment stays disabled until the owner approves publication, enables Pages with GitHub Actions on a supported plan, and sets the Actions repository variable `PAGES_ENABLED` to `true`. It uploads only `website/dist/`, never application source, QA logs or signing material.
+The root workflow tests and builds this static site on relevant pushes to `master` and pull requests, and can be started manually. The owner approved public source and website publication on 31 October 2026. Pages uses GitHub Actions and `PAGES_ENABLED=true`; deployment runs only on `master` outside pull requests. It uploads only `website/dist/`, never application source, QA logs or signing material.
 
-A published Pages site can be public even when its source repository is private. Do not make the application repository public as a workaround without explicit owner approval. For another static host, set `SITE_URL` during the build and publish only `dist/`. No cross-repository copying is needed.
+This repository and the deployed website are public. Check the workflow result before claiming a particular revision is deployed. For another static host, set `SITE_URL` during the build and publish only `dist/`. No cross-repository copying is needed.
 
 ## Design and accessibility
 
@@ -46,7 +46,7 @@ The site loads no third-party fonts, analytics, trackers or runtime dependencies
 
 ## Product status
 
-EasyControl is development software. The website distinguishes observed macOS behavior from automated/mock coverage and untested release gates. This repository currently requires access. There is no public distribution-ready installer release yet. See the [latest hardening report](../docs/HARDENING-2026-10-30.md).
+EasyControl is development software. The website distinguishes observed macOS behavior from automated/mock coverage and untested release gates. Source is publicly available under MIT. There is no public distribution-ready installer release yet. See the [latest hardening report](../docs/HARDENING-2026-10-30.md).
 
 ## Credits and license
 

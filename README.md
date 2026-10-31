@@ -7,12 +7,16 @@
 <p align="center"><strong>Direct remote desktop. A Rust engine. A native workspace.</strong></p>
 
 <p align="center">
-  <a href="website/">Website source</a> ·
-  <a href="website/docs.html">Documentation source</a> ·
+  <a href="https://udhaybhat00.github.io/easycontrol/">Website</a> ·
+  <a href="https://udhaybhat00.github.io/easycontrol/docs.html">Documentation</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="docs/QA-2026-10-28.md">QA report</a> ·
   <a href="CONTRIBUTING.md">Contribute</a>
 </p>
+
+[![Website deployment](https://github.com/udhaybhat00/easycontrol/actions/workflows/website.yml/badge.svg)](https://github.com/udhaybhat00/easycontrol/actions/workflows/website.yml)
+[![Validation](https://github.com/udhaybhat00/easycontrol/actions/workflows/validate.yml/badge.svg)](https://github.com/udhaybhat00/easycontrol/actions/workflows/validate.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ![EasyControl project banner](docs/assets/banner.svg)
 
@@ -20,10 +24,10 @@ EasyControl is an MIT-licensed remote-desktop application built with **Rust, Tau
 
 | Application | Protocol | License | Release status |
 | :-- | :-- | :-- | :-- |
-| Rust + Tauri 2 | v5 | [MIT](LICENSE) | Development · 0.1.0 |
+| Rust + Tauri 2 | v5 | [MIT](LICENSE) | Under development · source prerelease |
 
 > [!IMPORTANT]
-> **This is development software, not a production-ready release.** Real macOS capture and rendering have been observed. Controlled real input, extended two-machine QA, distribution signing and notarization remain release gates. No public signed installer is available yet. See [validation](#validation-and-release-status).
+> **Public development preview — under active development.** Real macOS capture and rendering have been observed. Controlled real input, extended two-machine QA, distribution signing and notarization remain release gates. Build from source for evaluation. No production-ready signed installer is available yet. See [validation](#validation-and-release-status).
 
 Latest follow-up: [release hardening — 30 October 2026](docs/HARDENING-2026-10-30.md), including dependency audits, additional regressions and the fail-closed macOS distribution gate.
 
@@ -78,13 +82,15 @@ There is no global device-ID service, account requirement, device discovery or a
 
 ## Quick start
 
+The [Releases page](https://github.com/udhaybhat00/easycontrol/releases) provides source snapshots marked as prereleases. They are for development and testing; application installers will be published after distribution and real-device QA gates pass.
+
 ### Prerequisites
 
 - Rust stable with Cargo, rustfmt and Clippy.
 - Node.js **22.12+** and npm.
 - Native [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform.
 - On macOS, Xcode Command Line Tools and the permissions described below.
-- Access to this repository, which is currently private. The application, website and documentation are maintained together here.
+- The public [EasyControl repository](https://github.com/udhaybhat00/easycontrol). The application, website and documentation are maintained together here.
 
 ### Clone and validate the engine
 
@@ -338,7 +344,7 @@ Check host Accessibility, host approval, client Send input and viewer focus. The
 <details>
 <summary><strong>A source link returns 404</strong></summary>
 
-This repository currently requires access. Sign in using an authorized account or contact the maintainer. Application and website source are both maintained here.
+The repository is public at https://github.com/udhaybhat00/easycontrol. Check the spelling and use the `master` branch. Application and website source are both maintained here; report a broken documentation link through Issues.
 
 </details>
 
@@ -348,7 +354,7 @@ This repository currently requires access. Sign in using an authorized account o
 
 The dependency-free static site lives in `website/` in this repository alongside the application. It includes actual screenshots, a build/usage guide, architecture and validation details, search, copy buttons, responsive navigation, reduced-motion support and System/Light/Dark appearance. There is no separate website repository to synchronize.
 
-**Hosting status:** the former website-only repository was deleted by the owner on 31 October 2026 and its old Pages deployment is retired. Pages publication from this private repository is not enabled; the current GitHub plan previously rejected it. The intended URL is `https://udhaybhat00.github.io/easycontrol/`, not a live-site claim. Keep the repository private unless its owner explicitly chooses otherwise. The root [website workflow](.github/workflows/website.yml) validates the site on every relevant change; deployment requires Pages availability, owner approval to publish the static site, and the repository variable `PAGES_ENABLED=true`.
+**Public website:** [udhaybhat00.github.io/easycontrol](https://udhaybhat00.github.io/easycontrol/) · [Usage documentation](https://udhaybhat00.github.io/easycontrol/docs.html). GitHub Pages is configured to publish only `website/dist/` from this repository. The [website workflow](.github/workflows/website.yml) tests and builds relevant changes; deployment runs on `master` with `PAGES_ENABLED=true`. The former website-only repository is deleted. See the workflow for the latest deployment result.
 
 ```bash
 cd website

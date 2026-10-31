@@ -14,10 +14,12 @@ The former `easycontrol-website` repository's tracked files matched `website/` b
 
 ## Publication boundary
 
-The retained repository remains private. The owner completed deletion of `udhaybhat00/easycontrol-website` on 31 October 2026. An authenticated GitHub API lookup returned HTTP 404 afterward, while `udhaybhat00/easycontrol` remained accessible and private with its pushed `master` branch intact. The former website deployment is retired. `https://udhaybhat00.github.io/easycontrol/` is the intended canonical URL, not a verified live deployment.
+On 31 October 2026, the owner completed deletion of `udhaybhat00/easycontrol-website`, then explicitly approved making `udhaybhat00/easycontrol` public and enabling public website hosting. GitHub confirms the retained repository is public and Pages is configured with GitHub Actions at https://udhaybhat00.github.io/easycontrol/.
 
-Pages activation is not part of this consolidation: automatic approval review rejected enabling it because publication could expose content from a private repository. A future deployment needs explicit owner approval for public website publication and a GitHub plan supporting Pages from this private repository. No source visibility, billing, or spending setting was changed.
+The earlier publication block applied while the repository was private and publication was not approved. It is resolved by the owner's later explicit authorization. No billing or spending setting was changed.
 
-Once approved and supported, select GitHub Actions in Settings → Pages and set the Actions repository variable `PAGES_ENABLED=true`. The workflow builds on relevant pushes and pull requests, but only deploys `master` outside pull requests. Leave the variable unset until publishing is approved. A private repository does not necessarily imply a private published website.
+The Actions repository variable `PAGES_ENABLED=true` enables the root website workflow. It tests and builds on relevant pushes and pull requests, and deploys only `website/dist/` from `master` outside pull requests. Check the workflow run to identify the latest successfully deployed revision. Application source is public on GitHub, but is not included in the static hosting artifact.
 
-For local preview, run `npm test`, `npm run build`, then `npm run dev` from `website/`. The site serves at `http://127.0.0.1:4173`. Never publish the repository root, development logs, application data or signing credentials as static content.
+Source releases are development prereleases. Public availability does not satisfy the remaining real-input, platform, signing, notarization or security-review gates documented in the QA reports.
+
+For local preview, run `npm test`, `npm run build`, then `npm run dev` from `website/`. The site serves at `http://127.0.0.1:4173`. Never publish development logs, application data or signing credentials as static content.
