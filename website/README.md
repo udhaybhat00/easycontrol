@@ -1,6 +1,6 @@
 # EasyControl website
 
-The product website and documentation for EasyControl, maintained alongside the Rust engine and Tauri desktop app in **udhaybhat00/easycontrol**. This directory is the only maintained website source. The former website-only repository and deployment are scheduled for removal; final deletion awaits browser confirmation because the CLI lacks the `delete_repo` scope.
+The product website and documentation for EasyControl, maintained alongside the Rust engine and Tauri desktop app in **udhaybhat00/easycontrol**. This directory is the only maintained website source. The former website-only repository and deployment are scheduled for removal; final deletion is approved but awaits manual completion because the CLI lacks `delete_repo` scope and browser automation cannot activate the confirmation button.
 
 **Hosting status:** no verified live deployment from this repository. The intended URL is `https://udhaybhat00.github.io/easycontrol/`. The repository remains private and the current plan previously rejected GitHub Pages. Canonical metadata is not proof of a live deployment.
 
