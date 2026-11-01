@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Maximize2, Monitor, Power, ScanLine } from "lucide-react";
 import { core, decodeFramePacket, type RemoteMonitor, type ViewerInput } from "./bridge";
 import { HeldRemoteKeys, remoteKeyCode } from "./keymap";
+import { FrameMeter } from "./frame-meter";
 import { afterInputRelease, mapCoordinates, mouseButton, scrollSteps } from "./viewer-utils";
 
 export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDisconnect, onError }: {
@@ -23,11 +24,11 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
   const [monitors, setMonitors] = useState<RemoteMonitor[]>([]);
   const [selected, setSelected] = useState<RemoteMonitor>();
   const [switching, setSwitching] = useState(false);
-  const [stats, setStats] = useState({ fps: 0, dropped: 0, width: 0, height: 0, bytesPerSecond: 0 });
+  const [stats, setStats] = useState(() => new FrameMeter(performance.now()).sample(performance.now()));
   const [originalSize, setOriginalSize] = useState(false);
   const [focused, setFocused] = useState(false);
   const [inputTransition, setInputTransition] = useState(false);
-  allowed.current = inputAllowed && !inputTransition && !switching;
+  allowed.current = inputAllowed && !inputTransition && !switching && stats.state === "live";
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
@@ -44,7 +45,8 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
   }, [send]);
 
   useEffect(() => {
-    let live = true, sequence = 0, frames = 0, bytes = 0, started = performance.now();
+    let live = true, sequence = 0;
+    const meter = new FrameMeter(performance.now());
     let timer: number | undefined;
     const refreshMonitors = async () => {
       try {
@@ -57,6 +59,7 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
     };
     void refreshMonitors();
     const monitorTimer = window.setInterval(refreshMonitors, 2000);
+    const statsTimer = window.setInterval(() => { if (live) setStats(meter.sample(performance.now())); }, 1000);
     const poll = async () => {
       try {
         const raw = await core.latestFrame(sessionId, sequence);
@@ -71,14 +74,7 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
             if (target.width !== frame.width) target.width = frame.width;
             if (target.height !== frame.height) target.height = frame.height;
             context.putImageData(new ImageData(new Uint8ClampedArray(frame.pixels), frame.width, frame.height), 0, 0);
-            frames++;
-            bytes += packet.byteLength;
-            const elapsed = performance.now() - started;
-            if (elapsed >= 1000) {
-              setStats({ fps: Math.round(frames * 1000 / elapsed), dropped: frame.dropped,
-                width: frame.width, height: frame.height, bytesPerSecond: bytes * 1000 / elapsed });
-              frames = 0; bytes = 0; started = performance.now();
-            }
+            meter.receive(frame, packet.byteLength, performance.now());
           }
         }
       } catch (error) { if (live) errors.current(String(error)); }
@@ -86,10 +82,10 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
       if (live) timer = window.setTimeout(poll, 16);
     };
     void poll();
-    return () => { live = false; window.clearTimeout(timer); window.clearInterval(monitorTimer); release(); };
+    return () => { live = false; window.clearTimeout(timer); window.clearInterval(monitorTimer); window.clearInterval(statsTimer); release(); };
   }, [sessionId, release]);
 
-  useEffect(() => { if (!inputAllowed) release(); }, [inputAllowed, release]);
+  useEffect(() => { if (!inputAllowed || stats.state !== "live") release(); }, [inputAllowed, stats.state, release]);
   useEffect(() => {
     const blur = () => { setFocused(false); release(); };
     window.addEventListener("blur", blur);
@@ -129,7 +125,7 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
     if (allowed.current) void flushWheel();
   };
   return <article ref={panel} className="live-viewer">
-    <div className="card-title"><Monitor size={18}/><span>Remote session</span><em>{inputAllowed ? "Input requests enabled" : "View only"}</em>
+    <div className="card-title"><Monitor size={18}/><span>Remote session</span><em>{inputAllowed ? (stats.state === "live" ? "Input requests enabled" : "Input paused") : "View only"}</em>
       <div className="viewer-actions"><button className="icon-button" aria-label="Toggle fullscreen" title="Toggle fullscreen" onClick={fullscreen}><Maximize2 size={17}/></button><button className="button danger" onClick={onDisconnect}><Power size={15}/>Disconnect</button></div>
     </div>
     <div className="viewer-toolbar">
@@ -140,7 +136,7 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
         finally { setSwitching(false); }
       }}>{monitors.length ? monitors.map(item => <option key={item.index} value={item.index}>{`Display ${item.index + 1} · ${item.width}×${item.height}`}</option>) : <option>Waiting for displays</option>}</select></label>
       <button className={originalSize ? "tool active" : "tool"} onClick={() => setOriginalSize(value => !value)}><ScanLine size={15}/>{originalSize ? "Original size" : "Fit to window"}</button>
-      <label><input type="checkbox" checked={inputAllowed} disabled={inputTransition} onChange={async event => {
+      <label><input type="checkbox" checked={inputAllowed} disabled={inputTransition || (!inputAllowed && stats.state !== "live")} onChange={async event => {
         const enabled = event.target.checked;
         setInputTransition(true);
         try {
@@ -151,6 +147,7 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
       <span>{stats.width ? `${stats.width}×${stats.height} · ${stats.fps} fps · ${stats.dropped} dropped · ${(stats.bytesPerSecond / 1048576).toFixed(1)} MiB/s IPC` : "Waiting for screen frames…"}</span>
       <span>{focused ? "Display focused" : "Click the display to focus"}</span>
     </div>
+    {stats.state === "stalled" && <p className="viewer-health" role="status">No new screen frames. Input is paused until frames resume.</p>}
     <div className="canvas-shell"><canvas ref={canvas} className={originalSize ? "remote-canvas original" : "remote-canvas"} tabIndex={0} aria-label="Remote desktop display"
       onFocus={() => setFocused(true)} onBlur={() => { setFocused(false); release(); }}
       onPointerMove={event => {

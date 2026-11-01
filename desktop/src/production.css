@@ -56,3 +56,5 @@ input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-
 .live-viewer:fullscreen { padding:16px; display:flex; flex-direction:column; height:100vh; }
 .live-viewer:fullscreen .canvas-shell { flex:1; min-height:0; }
 .live-viewer:fullscreen .remote-canvas:not(.original) { max-height:calc(100vh - 150px); }
+
+.viewer-health { margin:12px 0; padding:8px 12px; border:1px solid var(--border); border-left:3px solid var(--amber); border-radius:8px; background:var(--surface); color:var(--text); font-size:13px; }

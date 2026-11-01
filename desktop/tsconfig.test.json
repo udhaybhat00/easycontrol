@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": { "noEmit": false, "outDir": ".test-build", "rootDir": "src" },
-  "include": ["src/bridge.ts", "src/keymap.ts", "src/viewer-utils.ts", "src/session-history.ts"]
+  "include": ["src/bridge.ts", "src/keymap.ts", "src/viewer-utils.ts", "src/session-history.ts", "src/frame-meter.ts"]
 }

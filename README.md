@@ -29,7 +29,7 @@ EasyControl is an MIT-licensed remote-desktop application built with **Rust, Tau
 > [!IMPORTANT]
 > **Public development preview — under active development.** Real macOS capture and rendering have been observed. Full viewer-input QA, extended multi-machine reliability, distribution signing and notarization remain release gates. Build from source for evaluation. No production-ready signed installer is available yet. See [validation](#validation-and-release-status).
 
-Latest follow-up: [real macOS reliability — 1 November 2026](docs/QA-2026-11-01.md), including a reproduced keyboard crash, its mapping fix, live capture measurements and the remaining release gates. Earlier dependency-audit evidence remains in the [30 October hardening report](docs/HARDENING-2026-10-30.md).
+Latest follow-up: [macOS stream-stall and recovery QA — 1 November 2026](docs/QA-NETWORK-2026-11-01.md), including frozen-frame detection, real TCP pause/recovery and measured cancellation. Earlier [input/reliability evidence](docs/QA-2026-11-01.md) and [dependency hardening](docs/HARDENING-2026-10-30.md) remain available.
 
 ## Contents
 
@@ -70,7 +70,7 @@ Latest follow-up: [real macOS reliability — 1 November 2026](docs/QA-2026-11-0
 | Direct sessions | Numeric IP address + port, host/client lifecycle, wrong-password retry and disconnect cleanup |
 | Authentication | SPAKE2 password authentication with encrypted key confirmation |
 | Encryption | Protocol v5, ChaCha20-Poly1305, directional key material and HKDF-SHA256 |
-| Live viewer | Actual RGBA frames through bounded native binary IPC; fit/original modes, monitor inventory and frame statistics |
+| Live viewer | Actual RGBA frames through bounded native binary IPC; fit/original modes, monitor inventory, clock-driven frame statistics and stalled-stream guidance |
 | Remote input | Host-enforced default deny, explicit approve/revoke controls, coordinate/key mapping and held-input cleanup |
 | Local workspace | Saved device addresses, recent authenticated sessions and Light / Dark / System appearance |
 | Platform permissions | Real macOS Screen Recording / Accessibility state and user guidance |
@@ -287,16 +287,16 @@ Keep **Send input unchecked** during recursive same-Mac screen capture unless an
 
 ## Validation and release status
 
-**Latest local validation recorded 1 November 2026:** 68 passing application tests; 1 permission-dependent capture test ignored. Website tests are counted separately. These are recorded results, not a claim that every future commit has passed.
+**Latest local validation recorded 1 November 2026:** 71 passing application tests; 1 permission-dependent capture test ignored. Website tests are counted separately. These are recorded results, not a claim that every future commit has passed.
 
 | Suite / check | Observed result |
 | :-- | :-- |
 | Rust core | 47 library + 1 public API integration passed; 1 ignored |
 | Tauri bridge | 5 tests passed |
-| Frontend | 15 tests passed |
+| Frontend | 18 tests passed |
 | Website | 6 tests passed; static build passed |
 | Dependency audits | No vulnerability advisories in either Cargo lockfile; npm audit clean. Upstream maintenance/unsoundness warnings remain documented. |
-| Last verified hosted validation | `324e406` passed macOS, Windows/Linux core checks and dependency audits; see the workflow for newer revisions |
+| Last verified hosted validation | `aaebc47` passed macOS, Windows/Linux core checks and dependency audits; see the workflow for newer revisions |
 | Format, checks and strict Clippy | Passed |
 | Core release / frontend production builds | Passed |
 | Optimized macOS production and QA app builds | Passed |
@@ -304,6 +304,7 @@ Keep **Send input unchecked** during recursive same-Mac screen capture unless an
 | Real authentication, capture and rendering | Observed on macOS |
 | Host approve/revoke workflow | Observed; input backend initialized |
 | Actual injected mouse/keyboard and revocation | **Observed through core → macOS:** mouse, text, Shift+A, Backspace, Escape, right-click, scroll and held-Shift release; denied requests rejected after revocation. Real viewer gestures still need separate-target QA. |
+| Stream stall / recovery | Observed zero-FPS/input-pause guidance, recovery after a 14.7-second TCP pause and 15 ms API cancellation |
 | Viewer fullscreen / fit-original | Observed in current view-only GUI session |
 | Multiple physical monitors | Not tested; one monitor available |
 | Windows and Linux desktop releases | **Not validated** |

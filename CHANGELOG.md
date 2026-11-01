@@ -2,6 +2,17 @@
 
 Development source releases are listed below. No production-ready public signed installer is available yet.
 
+## 0.1.0-alpha.3 — 1 November 2026
+
+### Frozen-stream reliability
+
+- Drive FPS/bandwidth from a clock so missing frames cannot leave old live-looking statistics on screen.
+- Show stalled-stream guidance, pause input and release held client input until fresh frames return.
+- Add three frame-health regressions and a bounded, localhost-only development TCP pause fixture.
+- Verify actual 14.7-second pause/resume recovery and 15 ms Rust API cancellation without altering protocol v5.
+
+See [network QA evidence](docs/QA-NETWORK-2026-11-01.md) for exact boundaries and remaining release gates.
+
 ## 0.1.0-alpha.2 — 1 November 2026
 
 ### macOS reliability — 1 November 2026

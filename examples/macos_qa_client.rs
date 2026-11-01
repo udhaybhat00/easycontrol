@@ -28,16 +28,18 @@ mod qa {
         if password.len() != 14 || !password.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
             return Err("Copy the generated host password immediately before starting QA".into());
         }
-        let wrong_password = match std::env::args().nth(1).as_deref() {
-            None => false,
-            Some("--wrong-password") => true,
-            _ => return Err("Only --wrong-password is supported".into()),
+        let args: Vec<_> = std::env::args().skip(1).collect();
+        let (wrong_password, port) = match args.as_slice() {
+            [] => (false, 5899),
+            [flag] if flag == "--wrong-password" => (true, 5899),
+            [flag] if flag == "--proxy" => (false, 15999),
+            _ => return Err("Use no arguments, --wrong-password, or --proxy".into()),
         };
         if wrong_password {
             password.push('!');
         }
         let result = SessionManager::start_client(SessionConfig {
-            connect_addr: Some("127.0.0.1:5899".parse()?),
+            connect_addr: Some(format!("127.0.0.1:{port}").parse()?),
             password: Some(password),
             enable_capture: false,
             ..SessionConfig::default()
@@ -114,8 +116,12 @@ mod qa {
                 }
             }
         }
+        let closing = Instant::now();
         session.disconnect().await?;
-        println!("CLEAN SHUTDOWN");
+        println!(
+            "CLEAN SHUTDOWN elapsed_ms={}",
+            closing.elapsed().as_millis()
+        );
         Ok(())
     }
 }
