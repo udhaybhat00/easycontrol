@@ -1,8 +1,8 @@
 # Changelog
 
-All entries below are unreleased development work. There is no public signed installer release yet.
+Development source releases are listed below. No production-ready public signed installer is available yet.
 
-## Unreleased
+## 0.1.0-alpha.2 — 1 November 2026
 
 ### macOS reliability — 1 November 2026
 
@@ -12,7 +12,9 @@ All entries below are unreleased development work. There is no public signed ins
 - Remove ineffective settings controls and add inline default-port validation.
 - Extend the development-only loopback QA client with wrong-password probing, metadata-only performance windows and bounded stdin/runtime shutdown.
 
-See [current QA evidence](docs/QA-2026-11-01.md). Post-fix OS input, viewer and distribution gates are tracked explicitly.
+See [current QA evidence](docs/QA-2026-11-01.md). Actual macOS input/revocation, live GUI rendering, fullscreen and cleanup were verified after the fix. Separate-target viewer-input, soak and distribution gates remain explicit.
+
+## 0.1.0-alpha.1 — 31 October 2026
 
 ### Release hardening — 30 October 2026
 

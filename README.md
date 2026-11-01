@@ -27,7 +27,7 @@ EasyControl is an MIT-licensed remote-desktop application built with **Rust, Tau
 | Rust + Tauri 2 | v5 | [MIT](LICENSE) | Under development · source prerelease |
 
 > [!IMPORTANT]
-> **Public development preview — under active development.** Real macOS capture and rendering have been observed. Controlled real input, extended two-machine QA, distribution signing and notarization remain release gates. Build from source for evaluation. No production-ready signed installer is available yet. See [validation](#validation-and-release-status).
+> **Public development preview — under active development.** Real macOS capture and rendering have been observed. Full viewer-input QA, extended multi-machine reliability, distribution signing and notarization remain release gates. Build from source for evaluation. No production-ready signed installer is available yet. See [validation](#validation-and-release-status).
 
 Latest follow-up: [real macOS reliability — 1 November 2026](docs/QA-2026-11-01.md), including a reproduced keyboard crash, its mapping fix, live capture measurements and the remaining release gates. Earlier dependency-audit evidence remains in the [30 October hardening report](docs/HARDENING-2026-10-30.md).
 
@@ -296,15 +296,16 @@ Keep **Send input unchecked** during recursive same-Mac screen capture unless an
 | Frontend | 15 tests passed |
 | Website | 6 tests passed; static build passed |
 | Dependency audits | No vulnerability advisories in either Cargo lockfile; npm audit clean. Upstream maintenance/unsoundness warnings remain documented. |
-| Last verified hosted baseline | `34c265c` passed; see the workflow for newer revisions |
+| Last verified hosted validation | `324e406` passed macOS, Windows/Linux core checks and dependency audits; see the workflow for newer revisions |
 | Format, checks and strict Clippy | Passed |
 | Core release / frontend production builds | Passed |
 | Optimized macOS production and QA app builds | Passed |
 | DMG build / checksum | Passed |
 | Real authentication, capture and rendering | Observed on macOS |
 | Host approve/revoke workflow | Observed; input backend initialized |
-| Actual injected mouse/keyboard and revoked-input attempts | **Partial:** mouse targeting and text insertion observed; letter-key crash reproduced and fixed; post-fix key/revocation retest pending |
-| Fullscreen / multiple physical monitors | Automation blocked / not tested |
+| Actual injected mouse/keyboard and revocation | **Observed through core → macOS:** mouse, text, Shift+A, Backspace, Escape, right-click, scroll and held-Shift release; denied requests rejected after revocation. Real viewer gestures still need separate-target QA. |
+| Viewer fullscreen / fit-original | Observed in current view-only GUI session |
+| Multiple physical monitors | Not tested; one monitor available |
 | Windows and Linux desktop releases | **Not validated** |
 | Developer ID, notarization and clean-machine install | **Outstanding** |
 
@@ -338,7 +339,7 @@ Check Screen Recording for the exact installed host app and restart after granti
 <details>
 <summary><strong>Screen visible but input is denied</strong></summary>
 
-Check host Accessibility, host approval, client Send input and viewer focus. The client cannot approve itself. Actual injected input validation remains outstanding; do not interpret mock tests as proof of real OS input.
+Check host Accessibility, host approval, client Send input and viewer focus. The client cannot approve itself. Controlled core-to-macOS input and revocation have been observed; real viewer gesture forwarding still needs a separate controlled target. Do not interpret mock tests as proof of real OS input.
 
 </details>
 
@@ -372,7 +373,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, test expectations and focused
 
 Report sensitive findings through the private process in [SECURITY.md](SECURITY.md). Do not attach real passwords, session keys, captured private screens or clipboard contents.
 
-Independent security review, two-machine soak/recovery testing, real input validation and public distribution checks remain necessary. Encryption does not replace those release gates.
+Independent security review, extended soak/recovery testing, real viewer-input validation and public distribution checks remain necessary. Encryption does not replace those release gates.
 
 ## Credits and license
 
