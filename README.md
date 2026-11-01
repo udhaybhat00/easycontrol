@@ -10,7 +10,7 @@
   <a href="https://udhaybhat00.github.io/easycontrol/">Website</a> ·
   <a href="https://udhaybhat00.github.io/easycontrol/docs.html">Documentation</a> ·
   <a href="#quick-start">Quick start</a> ·
-  <a href="docs/QA-2026-10-28.md">QA report</a> ·
+  <a href="docs/QA-2026-11-01.md">QA report</a> ·
   <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
@@ -29,7 +29,7 @@ EasyControl is an MIT-licensed remote-desktop application built with **Rust, Tau
 > [!IMPORTANT]
 > **Public development preview — under active development.** Real macOS capture and rendering have been observed. Controlled real input, extended two-machine QA, distribution signing and notarization remain release gates. Build from source for evaluation. No production-ready signed installer is available yet. See [validation](#validation-and-release-status).
 
-Latest follow-up: [release hardening — 30 October 2026](docs/HARDENING-2026-10-30.md), including dependency audits, additional regressions and the fail-closed macOS distribution gate.
+Latest follow-up: [real macOS reliability — 1 November 2026](docs/QA-2026-11-01.md), including a reproduced keyboard crash, its mapping fix, live capture measurements and the remaining release gates. Earlier dependency-audit evidence remains in the [30 October hardening report](docs/HARDENING-2026-10-30.md).
 
 ## Contents
 
@@ -233,7 +233,8 @@ easycontrol/
 ├── docs/
 │   ├── assets/banner.svg       Project artwork
 │   ├── QA-2026-10-28.md         Real desktop observations and measurements
-│   └── HARDENING-2026-10-30.md  Latest hardening, validation and release gates
+│   ├── HARDENING-2026-10-30.md  Dependency hardening and distribution gates
+│   └── QA-2026-11-01.md         Current macOS reliability and measurements
 ├── .github/workflows/          Core/desktop validation and website build/deployment
 ├── CONTRIBUTING.md
 ├── SECURITY.md
@@ -286,23 +287,23 @@ Keep **Send input unchecked** during recursive same-Mac screen capture unless an
 
 ## Validation and release status
 
-**Latest local validation recorded 30 October 2026:** 65 passing application tests; 1 permission-dependent capture test ignored. Website tests are counted separately. These are recorded results, not a claim that every future commit has passed.
+**Latest local validation recorded 1 November 2026:** 68 passing application tests; 1 permission-dependent capture test ignored. Website tests are counted separately. These are recorded results, not a claim that every future commit has passed.
 
 | Suite / check | Observed result |
 | :-- | :-- |
 | Rust core | 47 library + 1 public API integration passed; 1 ignored |
 | Tauri bridge | 5 tests passed |
-| Frontend | 12 tests passed |
+| Frontend | 15 tests passed |
 | Website | 6 tests passed; static build passed |
 | Dependency audits | No vulnerability advisories in either Cargo lockfile; npm audit clean. Upstream maintenance/unsoundness warnings remain documented. |
-| Latest hosted CI | Blocked before execution by GitHub billing/spending restrictions |
+| Last verified hosted baseline | `34c265c` passed; see the workflow for newer revisions |
 | Format, checks and strict Clippy | Passed |
 | Core release / frontend production builds | Passed |
 | Optimized macOS production and QA app builds | Passed |
 | DMG build / checksum | Passed |
 | Real authentication, capture and rendering | Observed on macOS |
 | Host approve/revoke workflow | Observed; input backend initialized |
-| Actual injected mouse/keyboard and revoked-input attempts | **Not tested** |
+| Actual injected mouse/keyboard and revoked-input attempts | **Partial:** mouse targeting and text insertion observed; letter-key crash reproduced and fixed; post-fix key/revocation retest pending |
 | Fullscreen / multiple physical monitors | Automation blocked / not tested |
 | Windows and Linux desktop releases | **Not validated** |
 | Developer ID, notarization and clean-machine install | **Outstanding** |

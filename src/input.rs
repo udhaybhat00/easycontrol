@@ -152,6 +152,14 @@ impl InputInjector for EnigoInjector {
 
 #[cfg(feature = "input")]
 fn key_from_code(code: u16) -> Option<Key> {
+    // Browser KeyboardEvent.code represents physical keys. On macOS, passing
+    // Unicode through Enigo performs a TIS keyboard-layout lookup; recent macOS
+    // versions assert when that lookup runs on a Tokio worker. Native ANSI
+    // keycodes preserve physical-key semantics without touching the layout API.
+    #[cfg(target_os = "macos")]
+    if let Some(native) = macos_physical_key(code) {
+        return Some(Key::Other(native));
+    }
     Some(match code {
         0x08 => Key::Backspace,
         0x09 => Key::Tab,
@@ -198,6 +206,32 @@ fn key_from_code(code: u16) -> Option<Key> {
         0xDE => Key::Unicode('\''),
         0x30..=0x39 => Key::Unicode(char::from_u32(code as u32).unwrap_or('0')),
         0x41..=0x5A => Key::Unicode((code as u8 as char).to_ascii_lowercase()),
+        _ => return None,
+    })
+}
+
+#[cfg(all(feature = "input", target_os = "macos"))]
+fn macos_physical_key(code: u16) -> Option<u32> {
+    // Apple's HIToolbox Events.h kVK_ANSI_* constants, indexed by v5 wire codes.
+    const LETTERS: [u32; 26] = [
+        0x00, 0x0b, 0x08, 0x02, 0x0e, 0x03, 0x05, 0x04, 0x22, 0x26, 0x28, 0x25, 0x2e, 0x2d, 0x1f,
+        0x23, 0x0c, 0x0f, 0x01, 0x11, 0x20, 0x09, 0x0d, 0x07, 0x10, 0x06,
+    ];
+    const DIGITS: [u32; 10] = [0x1d, 0x12, 0x13, 0x14, 0x15, 0x17, 0x16, 0x1a, 0x1c, 0x19];
+    Some(match code {
+        0x41..=0x5a => LETTERS[(code - 0x41) as usize],
+        0x30..=0x39 => DIGITS[(code - 0x30) as usize],
+        0xba => 0x29,
+        0xbb => 0x18,
+        0xbc => 0x2b,
+        0xbd => 0x1b,
+        0xbe => 0x2f,
+        0xbf => 0x2c,
+        0xc0 => 0x32,
+        0xdb => 0x21,
+        0xdc => 0x2a,
+        0xdd => 0x1e,
+        0xde => 0x27,
         _ => return None,
     })
 }
@@ -360,12 +394,31 @@ mod tests {
             InputMsg::KeyRelease { code: 0x11 }
         ));
     }
-    #[cfg(feature = "input")]
+    #[cfg(all(feature = "input", not(target_os = "macos")))]
     #[test]
     fn letters_are_lowercase_and_unsupported_keys_are_rejected() {
         assert_eq!(key_from_code(65), Some(Key::Unicode('a')));
         assert_eq!(key_from_code(0xBA), Some(Key::Unicode(';')));
         assert_eq!(key_from_code(0xDE), Some(Key::Unicode('\'')));
+        assert_eq!(key_from_code(0xffff), None);
+    }
+    #[cfg(all(feature = "input", target_os = "macos"))]
+    #[test]
+    fn macos_printable_keys_never_use_worker_unsafe_layout_lookup() {
+        for code in (0x41..=0x5a).chain(0x30..=0x39).chain([
+            0xba, 0xbb, 0xbc, 0xbd, 0xbe, 0xbf, 0xc0, 0xdb, 0xdc, 0xdd, 0xde,
+        ]) {
+            assert!(
+                matches!(key_from_code(code), Some(Key::Other(_))),
+                "wire code {code:x}"
+            );
+        }
+        assert_eq!(key_from_code(0x41), Some(Key::Other(0x00)));
+        assert_eq!(key_from_code(0x53), Some(Key::Other(0x01)));
+        assert_eq!(key_from_code(0x5a), Some(Key::Other(0x06)));
+        assert_eq!(key_from_code(0x30), Some(Key::Other(0x1d)));
+        assert_eq!(key_from_code(0xba), Some(Key::Other(0x29)));
+        assert_eq!(key_from_code(0x11), Some(Key::Shift));
         assert_eq!(key_from_code(0xffff), None);
     }
 }

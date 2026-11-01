@@ -6,7 +6,9 @@
 #[cfg(target_os = "macos")]
 mod qa {
     use easycontrol::clipboard::{ClipboardBackend, SystemClipboard};
-    use easycontrol::{SessionCommand as Command, SessionConfig, SessionEvent, SessionManager};
+    use easycontrol::{
+        CoreError, SessionCommand as Command, SessionConfig, SessionEvent, SessionManager,
+    };
     use std::time::Instant;
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -22,33 +24,58 @@ mod qa {
                     .into(),
             );
         }
-        let password = SystemClipboard.get_text()?;
+        let mut password = SystemClipboard.get_text()?;
         if password.len() != 14 || !password.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
             return Err("Copy the generated host password immediately before starting QA".into());
         }
-        let session = SessionManager::start_client(SessionConfig {
+        let wrong_password = match std::env::args().nth(1).as_deref() {
+            None => false,
+            Some("--wrong-password") => true,
+            _ => return Err("Only --wrong-password is supported".into()),
+        };
+        if wrong_password {
+            password.push('!');
+        }
+        let result = SessionManager::start_client(SessionConfig {
             connect_addr: Some("127.0.0.1:5899".parse()?),
             password: Some(password),
             enable_capture: false,
             ..SessionConfig::default()
         })
-        .await?;
+        .await;
+        if wrong_password {
+            return match result {
+                Err(CoreError::Handshake(_)) => {
+                    println!("WRONG_PASSWORD_REJECTED");
+                    Ok(())
+                }
+                Err(error) => Err(error.into()),
+                Ok(session) => {
+                    session.disconnect().await?;
+                    Err("Wrong password was unexpectedly accepted".into())
+                }
+            };
+        }
+        let session = result?;
         let mut events = session.event_stream();
         println!("AUTHENTICATED. View-only until the host approves control. No input is sent automatically.");
         let mut lines = BufReader::new(tokio::io::stdin()).lines();
         let started = Instant::now();
         let mut frames = 0u64;
         let mut bytes = 0u64;
+        let mut dimensions = (0, 0);
+        let mut lagged_events = 0u64;
+        let mut last_stats = (Instant::now(), 0u64, 0u64);
         let mut monitors = Vec::new();
         let mut commands = 0u32;
         loop {
             tokio::select! {
                 event = events.recv() => match event {
-                    Ok(SessionEvent::ScreenFrame { data, .. }) => { frames += 1; bytes += data.len() as u64; },
+                    Ok(SessionEvent::ScreenFrame { width, height, data, .. }) => { frames += 1; bytes += data.len() as u64; dimensions = (width, height); },
                     Ok(SessionEvent::MonitorList { monitors: inventory }) => { monitors = inventory; println!("MONITORS {}",monitors.len()); },
                     Ok(SessionEvent::PermissionDenied { channel, .. }) => println!("DENIED {channel:?}"),
                     Ok(SessionEvent::Disconnected { .. }) => { println!("DISCONNECTED"); break; },
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => println!("EVENT_LAG"),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => { lagged_events += count; println!("EVENT_LAG {count}"); },
                     Err(_) => break,
                     _ => {},
                 },
@@ -58,6 +85,8 @@ mod qa {
                     if parts.first() == Some(&"quit") { break; }
                     if parts.first() == Some(&"stats") {
                         println!("RECEIVED frames={frames} rgba_bytes={bytes} elapsed_ms={} shift_down={}",started.elapsed().as_millis(),unsafe {CGEventSourceFlagsState(1)} & (1<<17) != 0);
+                        println!("WINDOW frames={} rgba_bytes={} elapsed_ms={} width={} height={} lagged_events={lagged_events}",frames-last_stats.1,bytes-last_stats.2,last_stats.0.elapsed().as_millis(),dimensions.0,dimensions.1);
+                        last_stats = (Instant::now(), frames, bytes);
                         continue;
                     }
                     commands += 1;
@@ -92,9 +121,15 @@ mod qa {
 }
 
 #[cfg(target_os = "macos")]
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    qa::run().await
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let result = runtime.block_on(qa::run());
+    // Tokio stdin uses a blocking reader. Do not hang process shutdown waiting
+    // for another line after the authenticated peer disconnects.
+    runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    result
 }
 
 #[cfg(not(target_os = "macos"))]

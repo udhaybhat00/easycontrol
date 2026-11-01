@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { decodeFramePacket } from "../.test-build/bridge.js";
-import { mapCoordinates, mouseButton, scrollSteps, validEndpoint } from "../.test-build/viewer-utils.js";
+import { afterInputRelease, mapCoordinates, mouseButton, scrollSteps, validEndpoint } from "../.test-build/viewer-utils.js";
 import { HeldRemoteKeys, remoteKeyCode } from "../.test-build/keymap.js";
 
 test("Retina scaling uses monitor input bounds with letterbox offsets and negative origins", () => {
@@ -75,4 +75,17 @@ test("production and QA policies allow internal binary IPC without public frame 
     assert.ok(!connect.includes("*"));
     assert.ok(!/wss?:/.test(connect));
   }
+});
+
+
+test("monitor change waits for input release and aborts when release fails", async () => {
+  const order = [];
+  let unblock;
+  const pending = afterInputRelease(() => new Promise(resolve => { unblock = resolve; }), async () => { order.push("change"); });
+  assert.deepEqual(order, []);
+  unblock();
+  await pending;
+  assert.deepEqual(order, ["change"]);
+  await assert.rejects(afterInputRelease(async () => { throw new Error("release failed"); }, async () => { order.push("unsafe change"); }));
+  assert.deepEqual(order, ["change"]);
 });

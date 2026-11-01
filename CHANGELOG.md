@@ -4,6 +4,16 @@ All entries below are unreleased development work. There is no public signed ins
 
 ## Unreleased
 
+### macOS reliability — 1 November 2026
+
+- Fix a reproduced letter-key host crash on macOS 26.6.1 by mapping physical printable keys directly to native ANSI keycodes instead of Enigo's worker-unsafe layout lookup.
+- Complete outgoing history rows on disconnect and record durations without inventing missing historical results.
+- Wait for held-input release before monitor selection and block new input during switching.
+- Remove ineffective settings controls and add inline default-port validation.
+- Extend the development-only loopback QA client with wrong-password probing, metadata-only performance windows and bounded stdin/runtime shutdown.
+
+See [current QA evidence](docs/QA-2026-11-01.md). Post-fix OS input, viewer and distribution gates are tracked explicitly.
+
 ### Release hardening — 30 October 2026
 
 - Update affected Tokio/zstd dependencies, remove unused legacy curve dependency, and upgrade the Vite toolchain; current locked dependency audits report zero vulnerability advisories, with upstream warnings documented.

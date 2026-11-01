@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Maximize2, Monitor, Power, ScanLine } from "lucide-react";
 import { core, decodeFramePacket, type RemoteMonitor, type ViewerInput } from "./bridge";
 import { HeldRemoteKeys, remoteKeyCode } from "./keymap";
-import { mapCoordinates, mouseButton, scrollSteps } from "./viewer-utils";
+import { afterInputRelease, mapCoordinates, mouseButton, scrollSteps } from "./viewer-utils";
 
 export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDisconnect, onError }: {
   sessionId: string; inputAllowed: boolean; onInputAllowed: (enabled: boolean) => void;
@@ -27,7 +27,7 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
   const [originalSize, setOriginalSize] = useState(false);
   const [focused, setFocused] = useState(false);
   const [inputTransition, setInputTransition] = useState(false);
-  allowed.current = inputAllowed && !inputTransition;
+  allowed.current = inputAllowed && !inputTransition && !switching;
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
@@ -134,8 +134,8 @@ export function RemoteViewer({ sessionId, inputAllowed, onInputAllowed, onDiscon
     </div>
     <div className="viewer-toolbar">
       <label>Remote monitor<select aria-label="Remote monitor" disabled={switching || !monitors.length} value={selected?.index ?? ""} onChange={async event => {
-        const index = Number(event.target.value); release(); setSwitching(true);
-        try { await core.selectMonitor(sessionId, index); setSelected(monitors.find(item => item.index === index)); }
+        const index = Number(event.target.value); allowed.current = false; setSwitching(true);
+        try { await afterInputRelease(release, () => core.selectMonitor(sessionId, index)); setSelected(monitors.find(item => item.index === index)); }
         catch (error) { onError(String(error)); }
         finally { setSwitching(false); }
       }}>{monitors.length ? monitors.map(item => <option key={item.index} value={item.index}>{`Display ${item.index + 1} · ${item.width}×${item.height}`}</option>) : <option>Waiting for displays</option>}</select></label>

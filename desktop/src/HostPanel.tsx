@@ -23,14 +23,14 @@ export function HostPanel({ permissions, onPermissions, onDisconnect, onError }:
     try {
       await callbacks.current.onPermissions({ ...permissions, input: !host.remoteInput });
       setHost(await core.hostSessionStatus());
-    } finally { setBusy(false); }
+    } catch (error) { callbacks.current.onError(String(error)); }
+    finally { setBusy(false); }
   };
   return <article className="panel host-panel section" aria-label="Host session">
     <div className="panel-body">
       <div className="section-header"><h2><MonitorUp size={18}/> Remote user connected</h2><button className="button danger" onClick={onDisconnect}><Power size={16}/>Disconnect</button></div>
       <p className="helper">Authenticated session · {host.screenSharing ? "Screen sharing is active" : "Waiting for screen capture. Check macOS permissions if no image appears."}</p>
       <div className="setting-row"><div><strong>Remote input</strong><small>{host.remoteInput ? "Mouse and keyboard approved. Revoke access at any time." : "View only. Approve mouse and keyboard control for this session."}</small></div><button className={`button ${host.remoteInput ? "danger" : "primary"}`} disabled={busy} onClick={toggle}>{busy ? "Applying…" : host.remoteInput ? "Revoke control" : "Approve control"}</button></div>
-      <p className="helper">Clipboard: {host.clipboard ? "Allowed" : "Denied"} · File transfer: {host.fileTransfer ? "Allowed" : "Denied"}</p>
     </div>
   </article>;
 }

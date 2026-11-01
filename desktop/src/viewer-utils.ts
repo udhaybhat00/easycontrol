@@ -23,3 +23,10 @@ export function mouseButton(button: number) { return [1, 3, 2][button]; }
 export function scrollSteps(delta: number, mode: number) {
   return delta === 0 ? 0 : Math.sign(delta) * Math.min(10, Math.max(1, Math.round(Math.abs(delta) / (mode === 0 ? 40 : 1))));
 }
+
+// Key/button releases must reach the command queue before changing monitor or
+// local permissions. Otherwise input can be stranded on the previous display.
+export async function afterInputRelease<T>(release: () => Promise<unknown>, change: () => Promise<T>): Promise<T> {
+  await release();
+  return change();
+}
