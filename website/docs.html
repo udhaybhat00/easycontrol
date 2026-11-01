@@ -399,11 +399,11 @@ npm run tauri:dev</code></pre>
         <section id="validation" data-doc-section>
           <h2>Validation and current status</h2>
           <p>
-            The 30 October 2026 local validation recorded
-            <strong>65 passing tests</strong> across the core, Tauri bridge and
+            The 1 November 2026 local validation recorded
+            <strong>68 passing tests</strong> across the core, Tauri bridge and
             frontend, with
             <strong>one permission-dependent capture test ignored</strong>.
-            These counts are a dated local result, not a live CI badge.
+            These counts are a dated local result, not a live CI badge. See the <a href="https://github.com/udhaybhat00/easycontrol/blob/master/docs/QA-2026-11-01.md">current macOS QA report</a> for the crash reproduction, fix and remaining release gates.
           </p>
           <div class="docs-table-wrap">
             <table class="docs-table">
@@ -427,7 +427,7 @@ npm run tauri:dev</code></pre>
                 </tr>
                 <tr>
                   <td>Frontend regressions</td>
-                  <td class="result-pass">12 passed</td>
+                  <td class="result-pass">15 passed</td>
                   <td>
                     Frames, coordinates, keys, endpoints, IPC and release policy
                   </td>
@@ -440,12 +440,12 @@ npm run tauri:dev</code></pre>
                 <tr>
                   <td>Host approve/revoke workflow</td>
                   <td class="result-pass">Observed</td>
-                  <td>Input backend initialized; no actual input injected</td>
+                  <td>Mouse targeting and text observed; letter-key crash fix awaits OS retest</td>
                 </tr>
                 <tr>
-                  <td>Actual input and multi-monitor</td>
+                  <td>Post-fix keys and multi-monitor</td>
                   <td class="result-pending">Not tested</td>
-                  <td>Controlled OS actions and second display required</td>
+                  <td>Fresh approval for key/revocation retest; second display required</td>
                 </tr>
                 <tr>
                   <td>Fullscreen</td>
